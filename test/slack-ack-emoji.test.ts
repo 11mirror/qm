@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { parseAckEmoji } from "../src/slack/config.ts";
 import { createAckEmojiPicker } from "../src/slack/ack-emoji.ts";
-import { CURATED_ACK_EMOJI, DEFAULT_ACK_REACTIONS, createAckPresenter } from "../src/slack/presenters.ts";
+import { CURATED_ACK_EMOJI, DEFAULT_ACK_REACTIONS, createAckPresenter } from "../src/slack/lib.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { testConfigStore } from "./support/test-database.ts";
 
@@ -19,6 +19,15 @@ test("parseAckEmoji: normalizes colons/case, splits on commas and spaces, drops 
   assert.deepEqual(parseAckEmoji(""), []);
   assert.deepEqual(parseAckEmoji(undefined), []);
   assert.deepEqual(parseAckEmoji(" , ::, !!"), []);
+});
+
+test("parseAckEmoji strips a long run of trailing colons promptly", () => {
+  assert.deepEqual(parseAckEmoji(":smile::"), ["smile"]);
+  const started = performance.now();
+  const names = parseAckEmoji(`smile${":".repeat(100_000)}x`);
+  const elapsedMs = performance.now() - started;
+  assert.deepEqual(names, []);
+  assert.ok(elapsedMs < 1_000, `parseAckEmoji took ${Math.round(elapsedMs)} ms`);
 });
 
 test("config store: ack emoji set/get/clear roundtrip, durable read included", async () => {

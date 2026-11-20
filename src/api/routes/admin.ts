@@ -48,14 +48,24 @@ import {
   getSlackInstallation,
   putSlackInstallation,
   startSlackInstallation,
+  managedSlackEvent,
   managedSlackRequest,
 } from "./admin/slack-installation.ts";
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
+import {
+  deleteMemoryBinding,
+  deleteMemoryBrain,
+  getMemoryBinding,
+  getMemoryBrain,
+  getMemoryRegistry,
+  putMemberBrains,
+  putMemoryBinding,
+  putMemoryBrain,
+} from "./admin/memory-registry.ts";
 import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
-import { listUnattendedGrants } from "./admin/unattended-grants.ts";
 import { offboardUser, reactivateUser } from "./admin/offboard.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
@@ -81,11 +91,25 @@ const IMPERSONATE = "impersonating a user is portal-only — the agent cannot ac
 const MCP_SERVERS =
   "registering or changing an MCP server is portal-only — the agent cannot change which tools it can call or which calls need approval";
 const LINKS = "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
+const MEMORY_REGISTRY_DELETE =
+  "deleting a memory brain or binding never goes through the agent — an org admin deletes it through the admin API outside chat";
 
 const routes: Route<ApiCtx>[] = [
-  { method: "POST", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
-  { method: "DELETE", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
-  { method: "POST", path: "/v1/slack/managed/events", auth: "public", handle: managedSlackRequest },
+  {
+    method: "POST",
+    path: "/v1/slack/managed/installation",
+    auth: "public",
+    tenant: "none",
+    handle: managedSlackRequest,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/slack/managed/installation",
+    auth: "public",
+    tenant: "none",
+    handle: managedSlackRequest,
+  },
+  { method: "POST", path: "/v1/slack/managed/events", auth: "public", tenant: "none", handle: managedSlackEvent },
   ...withAdmin([
     { method: "POST", path: "/v1/admin/slack-installation/start", auth: "either", handle: startSlackInstallation },
     { method: "GET", path: "/v1/admin/slack-installation", auth: "either", handle: getSlackInstallation },
@@ -120,7 +144,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.sessions.read", summary: "list the scope directory" },
       },
       handle: listAdminScopes,
     },
@@ -139,18 +162,11 @@ const routes: Route<ApiCtx>[] = [
       handle: getCredentialUsageSummary,
     },
     { method: "GET", path: "/v1/admin/resources", auth: "either", handle: getAdminResources },
-    {
-      method: "GET",
-      path: "/v1/admin/unattended-grants",
-      auth: "either",
-      handle: (ctx) => listUnattendedGrants(ctx, routes),
-    },
     { method: "GET", path: "/v1/admin/retention", auth: "either", handle: retention },
     {
       method: "GET",
       path: "/v1/admin/spend",
       auth: "either",
-      admin: { unattended: { grant: "admin.spend.read", summary: "read the org spend report" } },
       handle: spend,
     },
     {
@@ -159,7 +175,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.egress.read", summary: "read scope-labelled egress decisions" },
       },
       handle: egress,
     },
@@ -169,7 +184,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.sessions.read", summary: "list conversation metadata" },
       },
       handle: listAdminSessions,
     },
@@ -186,16 +200,8 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.sessions.read", summary: "read a conversation transcript" },
       },
       handle: getAdminSession,
-    },
-    {
-      method: "GET",
-      path: "/v1/admin/deliveries/shadow",
-      auth: "either",
-      admin: { privateRead: "always" },
-      handle: listAdminShadowDeliveries,
     },
     {
       method: "GET",
@@ -231,7 +237,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.files.read", summary: "read a stored file by ?id=" },
       },
       handle: readAdminFile,
     },
@@ -241,26 +246,24 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.files.read", summary: "download a stored file by ?id=" },
       },
       handle: downloadAdminFile,
     },
-    { method: "POST", path: "/v1/admin/files/upload", auth: "either", handle: uploadAdminFile },
     {
       method: "GET",
       path: "/v1/admin/files",
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.files.read", summary: "list a scope's document store" },
       },
       handle: listAdminFiles,
     },
+    { method: "POST", path: "/v1/admin/files/upload", auth: "either", streamBody: true, handle: uploadAdminFile },
     {
       method: "GET",
       path: "/v1/admin/errors",
       auth: "either",
-      admin: { privateRead: "always", unattended: { grant: "admin.sessions.read", summary: "read error telemetry" } },
+      admin: { privateRead: "always" },
       handle: listAdminErrors,
     },
     {
@@ -269,27 +272,19 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.audit.read", summary: "read security audit events" },
       },
       handle: listAdminAudit,
     },
     {
       method: "GET",
-      path: "/v1/admin/security/flags",
-      auth: "either",
-      admin: { privateRead: "always" },
-      handle: listSecurityFlags,
-    },
-    {
-      method: "GET",
       path: "/v1/admin/crons",
       auth: "either",
-      admin: { privateRead: "always", unattended: { grant: "admin.crons.read", summary: "list a scope's crons" } },
+      admin: { privateRead: "always" },
       handle: listAdminArtifacts,
     },
     {
       method: "GET",
-      path: "/v1/admin/deployments",
+      path: "/v1/admin/apps",
       auth: "either",
       admin: { privateRead: "always" },
       handle: listAdminArtifacts,
@@ -319,11 +314,65 @@ const routes: Route<ApiCtx>[] = [
       admin: { privateRead: "unless-org-scope" },
       handle: adminMemory,
     },
+    {
+      method: "GET",
+      path: "/v1/admin/memory-registry",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: getMemoryRegistry,
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: getMemoryBrain,
+    },
+    {
+      method: "PUT",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: putMemoryBrain,
+    },
+    {
+      method: "DELETE",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { agent: { portalOnly: MEMORY_REGISTRY_DELETE } },
+      handle: deleteMemoryBrain,
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/memory-registry/bindings/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: getMemoryBinding,
+    },
+    {
+      method: "PUT",
+      path: "/v1/admin/memory-registry/bindings/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: putMemoryBinding,
+    },
+    {
+      method: "DELETE",
+      path: "/v1/admin/memory-registry/bindings/:id",
+      auth: "either",
+      admin: { agent: { portalOnly: MEMORY_REGISTRY_DELETE } },
+      handle: deleteMemoryBinding,
+    },
+    {
+      method: "PUT",
+      path: "/v1/admin/memory-registry/member-brains",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: putMemberBrains,
+    },
     { method: "POST", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "PATCH", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "DELETE", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
-    { method: "GET", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
-    { method: "POST", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
     { method: "GET", path: "/v1/admin/users", auth: "either", handle: listUsers },
     { method: "GET", path: "/v1/admin/directory", auth: "either", handle: searchDirectory },
     {
@@ -388,6 +437,24 @@ const routes: Route<ApiCtx>[] = [
     { method: "POST", path: "/v1/admin/users/invite", auth: "either", handle: inviteTeammate },
     { method: "POST", path: "/v1/admin/external-users", auth: "either", handle: inviteExternalUser },
     { method: "DELETE", path: "/v1/admin/external-users/:email", auth: "either", handle: revokeExternalUser },
+  ]).map((route) => ({ ...route, browser: "self" as const })),
+  ...withAdmin([
+    {
+      method: "GET",
+      path: "/v1/admin/deliveries/shadow",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: listAdminShadowDeliveries,
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/security/flags",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: listSecurityFlags,
+    },
+    { method: "GET", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
+    { method: "POST", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
     {
       method: "POST",
       path: "/v1/admin/impersonate/stop",

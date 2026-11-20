@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { createSlackDeliverer } from "../src/slack/deliveries.ts";
 import { registerFinnyApprovalActions, type FinnyApprovalBridge } from "../src/slack/finny-approvals.ts";
 import {
   FINNY_CLARIFICATION_OTHER_ACTION_ID,
@@ -14,7 +14,6 @@ function deliveryHarness(ageMs = 0, existing: Array<Record<string, unknown>> = [
     calls.push({ method, args });
     return result;
   };
-  let claimed = false;
   const delivery = {
     id: "delivery-1",
     destination: { type: "slack", target: "C1:100.200", finnyPlanRequestId: "finny-request-1" },
@@ -44,27 +43,21 @@ function deliveryHarness(ageMs = 0, existing: Array<Record<string, unknown>> = [
     chat: { postMessage: record("chat.postMessage", { ts: "100.300" }) },
   };
   const acknowledged: string[] = [];
-  const poller = createDeliveryPoller({
+  const deliverer = createSlackDeliverer({
     core: {
       finnyApprovals: bridge,
-      holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-      claimDeliveries: async (type: string) => {
-        if (type !== "slack" || claimed) return [];
-        claimed = true;
-        return [delivery];
-      },
       ackDelivery: async (id: string) => void acknowledged.push(id),
     } as never,
     flow: { inFlightRuns: new Set<string>() } as never,
     threads: { mark: () => undefined } as never,
     clientForIdentity: () => client,
   });
-  return { acknowledged, bridge, calls, client, poller };
+  return { acknowledged, bridge, calls, client, deliverer, delivery };
 }
 
 test("a pending Finny plan delivery uses the durable verified post path", async () => {
   const h = deliveryHarness();
-  await h.poller.pollDeliveries(h.client);
+  await h.deliverer.deliver(h.client, h.delivery as never);
   const posted = h.calls.find((call) => call.method === "chat.postMessage")?.args;
   assert.equal(posted?.channel, "C1");
   assert.equal(posted?.thread_ts, "100.200");
@@ -90,7 +83,7 @@ test("a pending Finny clarification delivery renders native options and Other", 
       ],
     },
   });
-  await h.poller.pollDeliveries(h.client);
+  await h.deliverer.deliver(h.client, h.delivery as never);
   const rendered = JSON.stringify(h.calls.find((call) => call.method === "chat.postMessage")?.args.blocks);
   assert.match(rendered, /Which basis should be used/);
   assert.match(rendered, /Signed contracts/);
@@ -108,7 +101,7 @@ test("a recovered Finny plan delivery verifies before it posts again", async () 
     },
   ];
   const h = deliveryHarness(60_000, existing);
-  await h.poller.pollDeliveries(h.client);
+  await h.deliverer.deliver(h.client, h.delivery as never);
   assert.equal(
     h.calls.some((call) => call.method === "chat.postMessage"),
     false,

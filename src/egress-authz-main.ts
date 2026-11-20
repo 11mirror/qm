@@ -1,53 +1,27 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { BlockList, isIP } from "node:net";
+import { isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { EGRESS_PROXY_AUD, verifyCapabilityToken, type CapabilityClaims } from "./auth/capability-token.ts";
 import { egressDecision, hostMatches, isHostDenied, type EgressVerdict } from "./resolution/egress-policy.ts";
-import { createEgressAuditSink, type EgressAuditRecord, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
+import {
+  createEgressAuditSink,
+  type EgressAuditRecord,
+  type EgressAuditRecorder,
+  type EgressAuditSink,
+} from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
-import { errMessage, swallow } from "./util/errors.ts";
+import { errMessage, reportFailure, swallow } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { numEnv } from "./util/env.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
-import { isPrivateNetworkIp } from "./util/network.ts";
+import { isNeverAllowedHost, isNeverAllowedIp, isPrivateNetworkIp } from "./util/network.ts";
+import { withTenant } from "./tenants/context.ts";
 
 const OPEN: EgressPolicy = { allowedHosts: [], deniedHosts: [] };
 
 const DENY_ALL: EgressPolicy = { allowedHosts: ["deny.invalid"], deniedHosts: [] };
-
-const METADATA_HOSTS = ["metadata.google.internal", "metadata.goog"];
-
-const BLOCKED = new BlockList();
-BLOCKED.addSubnet("169.254.0.0", 16, "ipv4");
-BLOCKED.addSubnet("fe80::", 10, "ipv6");
-BLOCKED.addAddress("fd00:ec2::254", "ipv6");
-BLOCKED.addSubnet("127.0.0.0", 8, "ipv4");
-BLOCKED.addSubnet("0.0.0.0", 8, "ipv4");
-BLOCKED.addAddress("::1", "ipv6");
-BLOCKED.addAddress("::", "ipv6");
-
-export function isBlockedDestinationIp(ip: string): boolean {
-  const s = ip
-    .trim()
-    .toLowerCase()
-    .replace(/^\[(.*)\]$/, "$1")
-    .replace(/%.*$/, "");
-  const fam = isIP(s);
-  if (!fam) return false;
-  return BLOCKED.check(s, fam === 4 ? "ipv4" : "ipv6");
-}
-
-function isAlwaysBlockedHost(host: string): boolean {
-  const h = host
-    .trim()
-    .toLowerCase()
-    .replace(/^\[(.*)\]$/, "$1")
-    .replace(/\.$/, "");
-  if (isIP(h)) return isBlockedDestinationIp(h);
-  return METADATA_HOSTS.some((m) => h === m || h.endsWith(`.${m}`));
-}
 
 export function tokenFromRequest(req: IncomingMessage): string | null {
   const raw = req.headers["proxy-authorization"] as string | undefined;
@@ -73,7 +47,7 @@ export function hostFromAuthority(authority: string): string | null {
   return a;
 }
 
-export type EgressAuditRecorder = Pick<EgressAuditSink, "record">;
+export type { EgressAuditRecorder };
 
 export interface EgressAuthzDeps {
   capabilitySecret?: string;
@@ -99,7 +73,7 @@ async function decide(
   policy: EgressPolicy | undefined,
   lookup: (h: string) => Promise<string[]>,
 ): Promise<{ allow: boolean; verdict: EgressVerdict; address?: string }> {
-  if (isAlwaysBlockedHost(host)) return { allow: false, verdict: "denied" };
+  if (isNeverAllowedHost(host)) return { allow: false, verdict: "denied" };
   const byName = egressDecision(host, policy);
   if (!byName.allow) return byName;
   let ips: string[];
@@ -113,7 +87,7 @@ async function decide(
   if (
     ips.some(
       (ip) =>
-        isBlockedDestinationIp(ip) ||
+        isNeverAllowedIp(ip) ||
         isHostDenied(ip, policy?.deniedHosts) ||
         (policy?.denyPrivateNetworks === true && !privateAllowed && isPrivateNetworkIp(ip)),
     )
@@ -153,6 +127,7 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
         verdict: d.verdict,
         scopeLabel: (claims?.scopeId ?? "unknown") as ScopeId,
         principalId: claims?.actorId ?? "unknown",
+        ...(claims?.tenant ? { tenant: claims.tenant } : {}),
       });
     } catch (error) {
       swallow("egress-authz: audit record", error);
@@ -233,6 +208,19 @@ export function createRelayAuditSink(
   };
 }
 
+export function tenantRecorder(sink: EgressAuditSink): EgressAuditRecorder {
+  return {
+    record(r) {
+      if (r.tenant) withTenant(r.tenant, (tenant) => sink.record(tenant, r));
+      else
+        reportFailure(
+          "[egress-audit] failed to persist egress decision:",
+          new Error("egress audit record has no tenant"),
+        );
+    },
+  };
+}
+
 function main(): void {
   const port = numEnv(process.env.AUTHZ_PORT) ?? 48081;
   const capabilitySecret = process.env.CAPABILITY_SECRET;
@@ -245,7 +233,7 @@ function main(): void {
   const relay = coreApiUrl && relaySecret ? createRelayAuditSink(coreApiUrl, relaySecret) : null;
   relay?.start();
   const audit: EgressAuditRecorder =
-    relay ?? (databaseUrl ? createPostgresEgressAuditSink(databaseUrl) : createEgressAuditSink());
+    relay ?? (databaseUrl ? tenantRecorder(createPostgresEgressAuditSink(databaseUrl)) : createEgressAuditSink());
 
   const tokenless = process.env.EGRESS_TOKENLESS === "open" ? ("open" as const) : ("deny" as const);
   const server = buildEgressAuthzServer({ ...(capabilitySecret ? { capabilitySecret } : {}), audit, tokenless });

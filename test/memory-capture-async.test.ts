@@ -8,7 +8,7 @@ import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import type { MemoryService } from "../src/memory/memory-service.ts";
+import type { MemoryRecallContext, MemoryService } from "../src/memory/memory-service.ts";
 import type { MemoryStrategy } from "../src/memory/strategy.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -19,6 +19,7 @@ import type { Agent } from "../src/agent/agent.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -103,9 +104,10 @@ function buildOrchestrator(
     acl,
   });
   return createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
+    config,
     sessions,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
@@ -122,7 +124,7 @@ test("skipMemory turns neither recall nor capture", async () => {
   let recalls = 0;
   let captures = 0;
   const memory: MemoryService = {
-    recall: async () => (recalls++, [{ text: "remembered deployment state", score: 0.2 }]),
+    recall: async () => (recalls++, [{ text: "remembered deployment state" }]),
     capture: async () => 0,
     query: async () => [],
     read: async () => "",
@@ -238,4 +240,27 @@ test("recall does NOT block on an in-flight capture; continuity is eventually-co
     reply = (await orch.handleTurn(dm(`dm:U1:tC${i}`, "!sysprompt"))).reply ?? "";
   }
   assert.match(reply, /ZULU77/, "the recalled fact appears once the detached capture has settled");
+});
+
+test("an addressed turn asks memory with the message the member sent, not its wake envelope", async () => {
+  const contexts: Array<MemoryRecallContext | undefined> = [];
+  const memory: MemoryService = {
+    recall: async (_scope, context) => (contexts.push(context), []),
+    capture: async () => 0,
+    query: async () => [],
+    read: async () => "",
+  };
+  const orch = buildOrchestrator(createMockAgent(), memory);
+  const message = "Which instrument do I play in my string quartet?";
+
+  const result = await orch.handleTurn({
+    ...dm("dm:U1:addressed", '<wake reason="addressed"><message>Which instrument do I play?</message></wake>'),
+    origin: { kind: "human" },
+    displayText: message,
+    envelopeWrapped: true,
+  });
+
+  assert.equal(result.status, "ok");
+  assert.ok(contexts.length > 0);
+  assert.deepEqual(new Set(contexts.map((context) => context?.input)), new Set([message]));
 });

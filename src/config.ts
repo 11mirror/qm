@@ -1,4 +1,5 @@
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
+import { isDnsLabel } from "../plugins/chassis/src/dns-label.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
@@ -11,10 +12,13 @@ import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
+  MODEL_PROVIDERS,
   MODEL_REQUEST_CONTEXT_HEADERS,
+  isModelProvider,
   parseProviderBaseUrl,
   providerBaseUrlsFromEnv,
   type ModelGatewayTransportConfig,
+  type ModelProvider,
   type ProviderBaseUrls,
 } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
@@ -26,6 +30,7 @@ import {
 } from "./memory/policy.ts";
 import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strategy.ts";
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
+import { parsePrivateNetworkOrigins } from "./util/network.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
@@ -40,11 +45,8 @@ import { parseSharingPosture, type SharingPosture } from "./resolution/sharing-p
 import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
-  MODEL_PROVIDERS,
   defaultModelForProvider,
-  isModelProvider,
   onlyProvider,
-  type ModelProvider,
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
 
@@ -52,7 +54,6 @@ import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-setting
 import { finnyIntegrationConfigFromEnv, type FinnyIntegrationConfig } from "./finny/integration-config.ts";
 
 export interface Config extends SandboxSettings, DeploySettings {
-  productAnalytics?: { apiKey: string; host?: string };
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
   swarmsEnabled?: boolean;
@@ -71,11 +72,11 @@ export interface Config extends SandboxSettings, DeploySettings {
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
   egressServiceHosts?: string[];
+  privateNetworkAllowedOrigins: ReadonlySet<string>;
   brandingDefault?: OrgBranding;
   modelId?: string;
   codexAuthCredential?: string;
   claudeAuthCredential?: string;
-  detectModelId?: string;
   titleModelId?: string;
   judgeModelId?: string;
   anthropicApiKey?: string;
@@ -88,6 +89,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   captureLlmRequests: boolean;
   adminGrants?: string;
   trustedOidcAdminIssuer?: string;
+  workspaceProvisionerUrl?: string;
   emailAuthPrincipals?: string[];
   emailAuthDomain?: string;
   resendApiKey?: string;
@@ -95,7 +97,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   budgetUsdPerWindow?: number;
   orgBudgetUsdPerWindow?: number;
   budgetWindowMs: number;
-  maxContextTokens?: number;
   execTimeoutDefaultMs: number;
   execTimeoutMaxMs: number;
   turnWallClockMs: number;
@@ -119,7 +120,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
-  partnerChat?: { url: string; secret: string; label?: string };
+  genericChat?: { url: string; secret: string; label?: string; mark?: string };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -243,6 +244,13 @@ export const CONFIG_DEFAULTS = {
   processReaperIntervalMs: 30_000,
 } as const;
 
+const SVG_PATH_MAX = 4000;
+const SVG_PATH_CHARS = new Set("MmLlHhVvCcSsQqTtAaZz0123456789.-+eE, \t\n");
+
+function isSvgPathData(value: string): boolean {
+  return value.length <= SVG_PATH_MAX && [...value].every((ch) => SVG_PATH_CHARS.has(ch));
+}
+
 function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
   return sanitizeBranding({
     accent: env.ORG_BRAND_ACCENT,
@@ -329,6 +337,27 @@ export function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTranspo
     apiKeyHeader,
     models,
   };
+}
+
+const DEPLOYMENT_MODEL_CREDENTIALS = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "CLAUDE_AUTH_CREDENTIAL",
+  "CODEX_AUTH_CREDENTIAL",
+] as const;
+
+function workspaceProvisionerUrl(env: NodeJS.ProcessEnv): string {
+  const url = env.WORKSPACE_PROVISIONER_URL!;
+  if (!URL.canParse(url)) throw new Error("WORKSPACE_PROVISIONER_URL must be an absolute URL");
+  if (!isStrongSigningSecret(env.CORE_SIGNING_SECRET))
+    throw new Error("WORKSPACE_PROVISIONER_URL requires CORE_SIGNING_SECRET to sign provisioning requests");
+  const shared = DEPLOYMENT_MODEL_CREDENTIALS.filter((name) => env[name]?.trim());
+  if (shared.length)
+    throw new Error(
+      `WORKSPACE_PROVISIONER_URL cannot be combined with deployment model credentials: ${shared.join(", ")}`,
+    );
+  return url;
 }
 
 function defaultPluginSkillDirs(): string[] {
@@ -442,7 +471,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (securityScreenClassifier !== "proxy" && hasProxyConfig) {
     throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_CLASSIFIER=proxy");
   }
-  if (proxyProvider && (proxyProvider.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(proxyProvider))) {
+  if (proxyProvider && !isDnsLabel(proxyProvider)) {
     throw new Error("SECURITY_SCREEN_PROXY_PROVIDER must be a lowercase DNS label");
   }
   if (proxyProvider === "surface" || proxyProvider === "origin") {
@@ -485,14 +514,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   );
   const slackEventsPort =
     env.SLACK_EVENTS_MODE?.trim() === "http" ? numEnvStrict("SLACK_EVENTS_PORT", env.SLACK_EVENTS_PORT) : undefined;
-  if (Boolean(env.PARTNER_CHAT_URL?.trim()) !== Boolean(env.PARTNER_CHAT_SECRET?.trim()))
-    throw new Error("PARTNER_CHAT_URL and PARTNER_CHAT_SECRET must be set together");
+  if (Boolean(env.GENERIC_CHAT_URL?.trim()) !== Boolean(env.GENERIC_CHAT_SECRET?.trim()))
+    throw new Error("GENERIC_CHAT_URL and GENERIC_CHAT_SECRET must be set together");
+  const genericChatMark = env.GENERIC_CHAT_MARK?.trim();
+  if (genericChatMark && !isSvgPathData(genericChatMark))
+    throw new Error(`GENERIC_CHAT_MARK must be SVG path data of at most ${SVG_PATH_MAX} characters`);
   if (
     slackEventsPort !== undefined &&
     (!Number.isSafeInteger(slackEventsPort) || slackEventsPort <= 0 || slackEventsPort > 65_535)
   ) {
     throw new Error("SLACK_EVENTS_PORT must be an integer from 1 through 65535");
   }
+  const privateNetworkAllowedOrigins = parsePrivateNetworkOrigins(env.PRIVATE_NETWORK_ALLOWED_ORIGINS);
   const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
   const finny = finnyIntegrationConfigFromEnv(env);
   if (finny && !env.DATABASE_URL?.trim()) throw new Error("DATABASE_URL is required when FINNY_ENABLED=true");
@@ -509,9 +542,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...optNum(env, "PUBLIC_PORT", "publicPort"),
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
-    ...(env.POSTHOG_API_KEY?.trim()
-      ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
-      : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
@@ -535,7 +565,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.PI_MODEL ? { modelId: env.PI_MODEL } : {}),
     ...(codexAuthCredential ? { codexAuthCredential } : {}),
     ...(claudeAuthCredential ? { claudeAuthCredential } : {}),
-    ...(env.PI_DETECT_MODEL ? { detectModelId: env.PI_DETECT_MODEL } : {}),
     ...(env.PI_TITLE_MODEL ? { titleModelId: env.PI_TITLE_MODEL } : {}),
     ...(env.PI_JUDGE_MODEL ? { judgeModelId: env.PI_JUDGE_MODEL } : {}),
     ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
@@ -546,6 +575,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(modelGateway ? { modelGateway } : {}),
     ...(brokerCredentials.length ? { brokerCredentials } : {}),
     ...(env.TRUSTED_OIDC_ADMIN_ISSUER ? { trustedOidcAdminIssuer: env.TRUSTED_OIDC_ADMIN_ISSUER } : {}),
+    ...(env.WORKSPACE_PROVISIONER_URL ? { workspaceProvisionerUrl: workspaceProvisionerUrl(env) } : {}),
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     ...(env.AUTH_ALLOWED_EMAILS
       ? {
@@ -567,7 +597,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...optNum(env, "BUDGET_USD_PER_WINDOW", "budgetUsdPerWindow"),
     ...optNum(env, "ORG_BUDGET_USD_PER_WINDOW", "orgBudgetUsdPerWindow"),
     budgetWindowMs: numEnvStrict("BUDGET_WINDOW_MS", env.BUDGET_WINDOW_MS) ?? CONFIG_DEFAULTS.budgetWindowMs,
-    ...optNum(env, "MAX_CONTEXT_TOKENS", "maxContextTokens"),
     execTimeoutDefaultMs:
       (numEnvStrict("EXEC_TIMEOUT_DEFAULT_SEC", env.EXEC_TIMEOUT_DEFAULT_SEC) ??
         CONFIG_DEFAULTS.execTimeoutDefaultSec) * 1000,
@@ -608,12 +637,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
-    ...(env.PARTNER_CHAT_URL?.trim() && env.PARTNER_CHAT_SECRET?.trim()
+    ...(env.GENERIC_CHAT_URL?.trim() && env.GENERIC_CHAT_SECRET?.trim()
       ? {
-          partnerChat: {
-            url: env.PARTNER_CHAT_URL.trim(),
-            secret: env.PARTNER_CHAT_SECRET.trim(),
-            ...(env.PARTNER_CHAT_LABEL?.trim() ? { label: env.PARTNER_CHAT_LABEL.trim() } : {}),
+          genericChat: {
+            url: env.GENERIC_CHAT_URL.trim(),
+            secret: env.GENERIC_CHAT_SECRET.trim(),
+            ...(env.GENERIC_CHAT_LABEL?.trim() ? { label: env.GENERIC_CHAT_LABEL.trim() } : {}),
+            ...(genericChatMark ? { mark: genericChatMark } : {}),
           },
         }
       : {}),
@@ -643,6 +673,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),
     memoryStrategy: parseMemoryStrategyKind(env.MEMORY_STRATEGY),
     ...(memoryProviderConfig ? { memoryProviderConfig } : {}),
+    privateNetworkAllowedOrigins,
     memoryCaptureQuietMs:
       numEnvStrict("MEMORY_CAPTURE_QUIET_MS", env.MEMORY_CAPTURE_QUIET_MS) ?? DEFAULT_CAPTURE_QUIET_MS,
     ...optNum(env, "MEMORY_CAPTURE_MAX_TURNS", "memoryCaptureMaxTurns"),

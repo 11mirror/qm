@@ -35,7 +35,7 @@ export type TurnSurfaceOrigin = {
   workspace: string;
   policyNamespace?: string;
   replyThread?: string;
-} & ({ audience: "internal" } | { audience: "external"; access: ExternalAudienceAccess });
+} & ({ audience: "internal" } | { audience: "external"; access: ExternalAudienceAccess; guests?: true });
 
 interface OutboundMessage {
   text: string;
@@ -43,13 +43,22 @@ interface OutboundMessage {
   provenance: DeliveryProvenance;
 }
 
-interface SurfaceCapabilities {
+export interface SurfaceAction {
+  id: string;
+  label: string;
+  style: "primary" | "danger" | "default";
+  userIds?: readonly string[];
+}
+
+export interface SurfaceCapabilities {
   mirrored: boolean;
   liveReplies: boolean;
   nativeActor: boolean;
   externalParticipants: boolean;
   textOnly: boolean;
 }
+
+export const NON_WEB_PATHS = "skills' non-web paths apply, such as an ordinary authorization link";
 
 export interface SurfacePromptHints {
   mentionSyntax: string;
@@ -61,6 +70,7 @@ export interface SurfacePromptHints {
 export interface Surface<Native = unknown> {
   readonly kind: string;
   readonly label: string;
+  readonly mark?: string;
   readonly capabilities: SurfaceCapabilities;
   readonly promptHints: SurfacePromptHints;
   post(ref: SurfaceRef, message: OutboundMessage, idempotencyKey: string): Promise<void>;
@@ -68,6 +78,5 @@ export interface Surface<Native = unknown> {
   containerOf(target: string): string;
   principalFor(user: SurfaceUser): ActorAssertion;
   mention(user: SurfaceUser): string;
-  readableText(text: string, mentions: Readonly<Record<string, string>> | undefined): string;
   native(kind: string): Native | null;
 }

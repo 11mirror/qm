@@ -8,6 +8,7 @@ locals {
   ingress = merge(
     { for name, paths in local.public_path_services : name => { service = name, port = var.services[name].internal_port, paths = paths, hosts = [], priority = 1 + index(sort(keys(local.public_path_services)), name) } },
     { core-public = { service = "core", port = var.services["core"].public_port, paths = ["/*"], hosts = [], priority = 50000 } },
+    length(var.core_public_hosts) > 0 ? { core = { service = "core", port = var.services["core"].internal_port, paths = [], hosts = sort(tolist(var.core_public_hosts)), priority = 1000 } } : {},
   )
   service_ingress         = { for name in keys(var.services) : name => { for key, route in local.ingress : key => route if route.service == name } }
   egress_proxy            = { for name, service in var.services : name => service if name == "egress-proxy" }
@@ -777,9 +778,15 @@ resource "aws_secretsmanager_secret_version" "database" {
 resource "aws_lb" "this" {
   name               = local.alb_name
   load_balancer_type = "application"
+  idle_timeout       = 300
   subnets            = local.subnet_ids
   security_groups    = [aws_security_group.alb.id]
   tags               = local.tags
+  depends_on         = [aws_s3_bucket_policy.alb_logs]
+  access_logs {
+    bucket  = aws_s3_bucket.alb_logs.id
+    enabled = true
+  }
 }
 
 resource "aws_lb_target_group" "service" {
@@ -1107,3 +1114,54 @@ resource "aws_ecs_service" "service" {
   }
   tags = local.tags
 }
+
+resource "aws_s3_bucket" "alb_logs" {
+  bucket        = "${lower(local.alb_name)}-alb-logs-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+  tags          = local.tags
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AllowLoadBalancerLogDelivery"
+        Effect    = "Allow"
+        Principal = { Service = "logdelivery.elasticloadbalancing.amazonaws.com" }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.alb_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+        Condition = { ArnLike = { "aws:SourceArn" = "arn:aws:elasticloadbalancing:*:${data.aws_caller_identity.current.account_id}:loadbalancer/*" } }
+      },
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource  = [aws_s3_bucket.alb_logs.arn, "${aws_s3_bucket.alb_logs.arn}/*"]
+        Condition = { Bool = { "aws:SecureTransport" = "false", "aws:PrincipalIsAWSService" = "false" } }
+      },
+    ]
+  })
+}
+

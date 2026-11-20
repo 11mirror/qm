@@ -314,7 +314,6 @@ test("pins the complete evaluator identity and rejects a stale evaluator despite
     createDeterministicSpreadsheetWorker(staleEngine).run({ artifactBytes: artifact, binding: binding() }),
     /evaluator/i,
   );
-  // A stale producer cannot make the candidate trusted even after recomputing the canonical envelope digest.
   stale.envelopeDigest = recomputeEnvelopeDigest(stale);
   assert.notEqual(stale.envelopeDigest, envelope.envelopeDigest);
   assert.throws(() => verifySpreadsheetWorkerEnvelope(artifact, binding(), stale), /evaluator/i);

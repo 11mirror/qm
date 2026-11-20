@@ -2,20 +2,30 @@ import type { PoolClient } from "pg";
 import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
-import { msOf } from "../sessions/items.ts";
+import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
+import { orgId } from "../config.ts";
+import type { DirectoryMember } from "../directory/directory-store.ts";
+import { APP_IS_NOT_A_PERSON, PrincipalLinkError } from "./principal-links.ts";
+import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
+import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
+import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
+
+export { fold };
 
 type UserSource = "turn" | "invite" | "admin";
 type UserKind = "person" | "app";
 
-interface UserRecord {
+export interface UserRecord {
   id: string;
   principalId: string;
+  aliases: string[];
   kind: UserKind;
   firstSeenAt?: number;
   source?: UserSource;
   offboardedAt?: number;
   offboardedBy?: string;
+  displayName?: string;
 }
 
 export interface UserLink {
@@ -24,6 +34,16 @@ export interface UserLink {
   evidence: string;
   linkedBy: string;
   createdAt: number;
+}
+
+export interface UserActivity {
+  userId: string | null;
+  principalId: string;
+  kind: UserKind;
+  sessions: number;
+  turns: number;
+  lastSeenAt: number | null;
+  days: number[];
 }
 
 export interface UserLinkStore {
@@ -40,15 +60,30 @@ interface SeenPerson {
 
 export interface UserStore extends UserLinkStore {
   list(): Promise<UserRecord[]>;
-  get(id: string): Promise<UserRecord | null>;
+  get(idOrAlias: string): Promise<UserRecord | null>;
+  resolve(aliases: readonly string[]): Promise<Map<string, UserRecord>>;
+  activity(): Promise<UserActivity[]>;
   record(person: SeenPerson): Promise<boolean>;
   markOffboarded(id: string, by: string): Promise<UserRecord>;
   markReactivated(id: string): Promise<UserRecord | null>;
   markApps(ids: readonly string[]): Promise<number>;
+  applyDirectoryBots(members: readonly DirectoryMember[]): Promise<number>;
+  botSignIns(aliases: readonly string[]): Promise<string[]>;
+  setDisplayName(alias: string, name: string): Promise<boolean>;
 }
 
-export const fold = (expr: string): string =>
-  `CASE WHEN position('@' IN btrim(${expr})) > 0 THEN lower(btrim(${expr})) ELSE btrim(${expr}) END`;
+const DISPLAY_NAME_MAX = 200;
+
+export function cleanDisplayName(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const name = raw
+    .replace(/[\p{Cc}\p{Cf}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, DISPLAY_NAME_MAX)
+    .trim();
+  return name || undefined;
+}
 
 const userOf = (expr: string): string => `(SELECT l.user_id FROM user_links l WHERE l.alias_id = ${expr})`;
 
@@ -64,8 +99,6 @@ const ensureUsers = (aliases: string): string => `
 const knownPerson = (expr: string): string =>
   `(EXISTS (SELECT 1 FROM user_links k WHERE k.alias_id = ${expr}) OR ${expr} IN (SELECT alias FROM admins)
     OR ${expr} LIKE '%@%' OR ${expr} LIKE 'oidc:%')`;
-
-const ts = (param: string): string => `to_timestamp(${param}::double precision / 1000)`;
 
 const TURN_AUTHORS = `
   CREATE TEMP TABLE turn_authors ON COMMIT DROP AS
@@ -122,29 +155,7 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
            END IF;
          END IF;
 
-         CREATE TABLE IF NOT EXISTS users(
-           id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-           primary_alias TEXT NOT NULL UNIQUE,
-           kind          TEXT NOT NULL DEFAULT 'person' CHECK (kind IN ('person', 'app')),
-           first_seen_at TIMESTAMPTZ,
-           source        TEXT CHECK (source IN ('turn', 'invite', 'admin')),
-           offboarded_at TIMESTAMPTZ,
-           offboarded_by UUID REFERENCES users(id) ON DELETE SET NULL,
-           CHECK ((first_seen_at IS NULL) = (source IS NULL)),
-           CHECK (offboarded_at IS NOT NULL OR offboarded_by IS NULL)
-         );
-         CREATE TABLE IF NOT EXISTS user_links(
-           alias_id   TEXT PRIMARY KEY CHECK (alias_id <> ''),
-           user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-           evidence   TEXT NOT NULL,
-           linked_by  UUID REFERENCES users(id) ON DELETE SET NULL,
-           created_at TIMESTAMPTZ NOT NULL,
-           UNIQUE (user_id, alias_id)
-         );
-         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_primary_alias_link') THEN
-           ALTER TABLE users ADD CONSTRAINT users_primary_alias_link FOREIGN KEY (id, primary_alias)
-             REFERENCES user_links(user_id, alias_id) DEFERRABLE INITIALLY DEFERRED;
-         END IF;
+         ${USERS_SCHEMA}
 
          DELETE FROM staged_links WHERE coalesce(alias, '') = '' OR coalesce(canonical, '') = '' OR alias = canonical;
          ${ensureUsers("SELECT canonical FROM staged_links")}
@@ -231,11 +242,30 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
        END $$`,
     ],
   },
+  ...PERSONA_MIGRATIONS,
 ];
 
-const COLUMNS = `u.id, u.primary_alias, u.kind, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
+const TENANTED = tenantedUsers(USER_MIGRATIONS.filter((migration) => !PERSONA_MIGRATIONS.includes(migration)));
+
+export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
+  ...TENANTED.before,
+  ...USER_MIGRATIONS,
+  ...TENANTED.after,
+  ...PERSONA_TENANCY,
+  {
+    id: "users/v2/0006-display-name",
+    statements: [
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT
+         CHECK (display_name IS NULL OR (display_name <> '' AND char_length(display_name) <= ${DISPLAY_NAME_MAX}))`,
+    ],
+  },
+].sort((a, b) => Number(a.id > b.id) - Number(a.id < b.id));
+
+const COLUMNS = `u.id, u.primary_alias, u.kind,
+  ARRAY(SELECT a.alias_id FROM user_links a WHERE a.user_id = u.id
+         ORDER BY a.alias_id = u.primary_alias DESC, a.created_at, a.alias_id) AS aliases, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
   ${msOf("u.offboarded_at")} AS offboarded_at,
-  (SELECT b.primary_alias FROM users b WHERE b.id = u.offboarded_by) AS offboarded_by`;
+  (SELECT b.primary_alias FROM users b WHERE b.id = u.offboarded_by) AS offboarded_by, u.display_name`;
 const LINK_SELECT = `SELECT l.alias_id, u.primary_alias AS canonical_id, l.evidence,
     coalesce((SELECT b.primary_alias FROM users b WHERE b.id = l.linked_by), '') AS linked_by,
     ${msOf("l.created_at")} AS created_at
@@ -245,10 +275,12 @@ function toRecord(r: Record<string, unknown>): UserRecord {
   return {
     id: r.id as string,
     principalId: r.primary_alias as string,
+    aliases: (r.aliases as string[] | null) ?? [r.primary_alias as string],
     kind: (r.kind as UserKind | undefined) ?? "person",
     ...(r.first_seen_at != null ? { firstSeenAt: Number(r.first_seen_at), source: r.source as UserSource } : {}),
     ...(r.offboarded_at != null ? { offboardedAt: Number(r.offboarded_at) } : {}),
     ...(r.offboarded_by != null ? { offboardedBy: r.offboarded_by as string } : {}),
+    ...(r.display_name != null ? { displayName: r.display_name as string } : {}),
   };
 }
 
@@ -259,6 +291,44 @@ function toLink(r: Record<string, unknown>): UserLink {
     evidence: r.evidence as string,
     linkedBy: r.linked_by as string,
     createdAt: Number(r.created_at),
+  };
+}
+
+const ACTIVITY = `
+  WITH daily AS (
+    SELECT ${fold("e.author")} AS alias, (${msOf("e.created_at")} / 86400000)::bigint AS day, COUNT(*) AS turns,
+           ${msOf("MAX(e.created_at)")} AS last_at
+      FROM items e
+     WHERE e.tenant_id = ${TENANT} AND ${authoredUserTurn("e")}
+     GROUP BY 1, 2
+  ), turns AS (
+    SELECT coalesce(l.user_id::text, d.alias) AS who, d.day, SUM(d.turns) AS turns, MAX(d.last_at) AS last_at
+      FROM daily d LEFT JOIN user_links l ON l.alias_id = d.alias
+     GROUP BY 1, 2
+  ), per AS (
+    SELECT who, SUM(turns) AS turns, MAX(last_at) AS last_at, array_agg(day ORDER BY day) AS days
+      FROM turns GROUP BY who
+  ), member AS (
+    SELECT coalesce(l.user_id::text, ${fold("p.principal_id")}) AS who, l.user_id, COUNT(DISTINCT p.session_id) AS sessions
+      FROM participants p LEFT JOIN user_links l ON l.alias_id = ${fold("p.principal_id")}
+     WHERE coalesce(btrim(p.principal_id), '') <> ''
+     GROUP BY 1, 2
+  )
+  SELECT m.user_id, coalesce(u.primary_alias, m.who) AS principal_id, coalesce(u.kind, 'person') AS kind,
+         m.sessions, coalesce(per.turns, 0) AS turns, per.last_at, per.days
+    FROM member m
+    LEFT JOIN users u ON u.id = m.user_id
+    LEFT JOIN per ON per.who = m.who`;
+
+function toActivity(r: Record<string, unknown>): UserActivity {
+  return {
+    userId: (r.user_id as string | null) ?? null,
+    principalId: r.principal_id as string,
+    kind: r.kind as UserKind,
+    sessions: Number(r.sessions),
+    turns: Number(r.turns),
+    lastSeenAt: r.last_at == null ? null : Number(r.last_at),
+    days: ((r.days as (string | number)[] | null) ?? []).map(Number),
   };
 }
 
@@ -273,17 +343,20 @@ async function findUser(q: Query, alias: string): Promise<string | undefined> {
   return (await q(`SELECT user_id FROM user_links WHERE alias_id = $1`, [alias]))[0]?.user_id as string | undefined;
 }
 
-async function ensureUserIn(client: PoolClient, alias: string): Promise<string> {
+export async function ensureUserIn(client: PoolClient, alias: string): Promise<string> {
   const q = onClient(client);
   const found = await findUser(q, alias);
   if (found) return found;
   const created = (
-    await q(`INSERT INTO users(primary_alias) VALUES ($1) ON CONFLICT (primary_alias) DO NOTHING RETURNING id`, [alias])
+    await q(
+      `INSERT INTO users(primary_alias) VALUES ($1) ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id`,
+      [alias],
+    )
   )[0]?.id as string | undefined;
   if (created) {
     const linked = await q(
       `INSERT INTO user_links(alias_id, user_id, evidence, created_at) VALUES ($1, $2, 'primary', now())
-       ON CONFLICT (alias_id) DO NOTHING RETURNING alias_id`,
+       ON CONFLICT (tenant_id, alias_id) DO NOTHING RETURNING alias_id`,
       [alias, created],
     );
     if (linked.length) return created;
@@ -294,9 +367,26 @@ async function ensureUserIn(client: PoolClient, alias: string): Promise<string> 
   return winner;
 }
 
+const MARK_APPS = `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`;
+
+async function findBotSignIns(q: Query, aliases: readonly string[]): Promise<string[]> {
+  const rows = await q(
+    `SELECT s.alias FROM unnest($1::text[]) AS s(alias)
+      WHERE coalesce(
+        (SELECT bool_or(m.is_bot) FROM directory_members m
+          WHERE m.org_id = $2 AND (lower(m.principal_id) = lower(s.alias) OR m.slack_id = s.alias)),
+        EXISTS (SELECT 1 FROM user_links l JOIN users u ON u.id = l.user_id
+                 WHERE l.alias_id = s.alias AND u.kind = 'app'))`,
+    [aliases.map(foldPrincipalId), orgId()],
+  );
+  return rows.map((r) => r.alias as string);
+}
+
 async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
   const q = onClient(client);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
+  if ((await findBotSignIns(q, [link.principalId, link.canonicalId])).length)
+    throw new PrincipalLinkError(400, APP_IS_NOT_A_PERSON);
   const target = await ensureUserIn(client, link.canonicalId);
   const current = (
     await q(
@@ -313,17 +403,20 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     const source = current.user_id as string;
     await q(
       `UPDATE users c SET
-         kind = CASE WHEN a.kind = 'app' THEN 'app' ELSE c.kind END,
          first_seen_at = least(c.first_seen_at, a.first_seen_at),
          source = CASE WHEN a.first_seen_at < c.first_seen_at OR c.first_seen_at IS NULL THEN a.source ELSE c.source END,
          offboarded_at = least(c.offboarded_at, a.offboarded_at),
          offboarded_by = CASE WHEN a.offboarded_at < c.offboarded_at OR c.offboarded_at IS NULL
-                              THEN a.offboarded_by ELSE c.offboarded_by END
+                              THEN a.offboarded_by ELSE c.offboarded_by END,
+         display_name = coalesce(c.display_name, a.display_name)
        FROM users a WHERE c.id = $1 AND a.id = $2`,
       [target, source],
     );
     await q(`UPDATE users SET offboarded_by = $1 WHERE offboarded_by = $2`, [target, source]);
     await q(`UPDATE user_links SET linked_by = $1 WHERE linked_by = $2`, [target, source]);
+    await q(`UPDATE personas SET created_by = $1 WHERE created_by = $2`, [target, source]);
+    await q(`UPDATE persona_access SET granted_by = $1 WHERE granted_by = $2`, [target, source]);
+    await q(`UPDATE persona_versions SET edited_by = $1 WHERE edited_by = $2`, [target, source]);
     await q(`DELETE FROM users WHERE id = $1`, [source]);
   }
   const linkedBy = link.linkedBy ? await ensureUserIn(client, foldPrincipalId(link.linkedBy)) : null;
@@ -335,7 +428,11 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
 }
 
 export function createPostgresUserStore(connectionString: string): UserStore {
-  const pg = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS, ...USER_MIGRATIONS]);
+  const pg = createPgPool(connectionString, [
+    ...DIRECTORY_MIGRATIONS,
+    ...SESSION_MIGRATIONS,
+    ...USER_SCHEMA_MIGRATIONS,
+  ]);
   const { q } = pg;
   const transaction = async <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> =>
     withPgTransaction(await pg.pool(), fn);
@@ -348,9 +445,28 @@ export function createPostgresUserStore(connectionString: string): UserStore {
       );
       return rows.map(toRecord);
     },
-    async get(id) {
-      const rows = await q(`SELECT ${COLUMNS} FROM users u WHERE u.id = ${userOf("$1")}`, [foldPrincipalId(id)]);
+    async get(idOrAlias) {
+      const rows = await q(
+        `SELECT ${COLUMNS} FROM users u WHERE u.id = ${userOf("$1")} OR u.id::text = lower($2)
+          ORDER BY u.id = ${userOf("$1")} DESC LIMIT 1`,
+        [foldPrincipalId(idOrAlias), idOrAlias.trim()],
+      );
       return rows[0] ? toRecord(rows[0]) : null;
+    },
+    async resolve(aliases) {
+      const wanted = [...new Set(aliases.filter((a) => foldPrincipalId(a)))];
+      if (!wanted.length) return new Map();
+      const rows = await q(
+        `SELECT s.alias AS requested, ${COLUMNS}
+           FROM unnest($1::text[], $2::text[]) AS s(alias, folded)
+           JOIN user_links l ON l.alias_id = s.folded
+           JOIN users u ON u.id = l.user_id`,
+        [wanted, wanted.map(foldPrincipalId)],
+      );
+      return new Map(rows.map((r) => [r.requested as string, toRecord(r)]));
+    },
+    async activity() {
+      return (await q(ACTIVITY)).map(toActivity);
     },
     async record({ id, source, at }) {
       const alias = foldPrincipalId(id);
@@ -376,13 +492,75 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     },
     async markApps(ids) {
       if (!ids.length) return 0;
+      return (await q(MARK_APPS, [ids.map((id) => foldPrincipalId(id))])).length;
+    },
+    async applyDirectoryBots(members) {
+      const signIns = (isBot: boolean | undefined) =>
+        members
+          .filter((m) => m.isBot === isBot)
+          .flatMap((m) => [m.principalId, m.slackId].map(foldPrincipalId).filter(Boolean));
+      const bots = signIns(true);
+      return transaction(async (client) => {
+        const split = await client.query(
+          `WITH moving AS (
+             SELECT l.alias_id, l.user_id, l.evidence, l.linked_by FROM user_links l JOIN users u ON u.id = l.user_id
+              WHERE l.alias_id = ANY($1::text[]) AND u.primary_alias <> l.alias_id
+           ), created AS (
+             INSERT INTO users(primary_alias, kind) SELECT alias_id, 'app' FROM moving RETURNING id, primary_alias
+           ), moved AS (
+             UPDATE user_links l SET user_id = c.id, evidence = 'primary', linked_by = NULL
+               FROM moving m JOIN created c ON c.primary_alias = m.alias_id
+              WHERE l.alias_id = m.alias_id
+             RETURNING m.user_id AS from_user, c.id AS to_user, m.alias_id, m.evidence, m.linked_by
+           )
+           INSERT INTO audit_log(at, principal_id, action, resource, scope_label, detail)
+           SELECT $2::bigint, 'system:directory-sync', 'user_sign_in_split', from_user::text, 'users',
+                  jsonb_build_object('movedSignIns', jsonb_agg(jsonb_build_object(
+                    'alias', alias_id, 'userId', to_user, 'evidence', evidence, 'linkedBy', linked_by)
+                    ORDER BY alias_id))::text
+             FROM moved GROUP BY from_user`,
+          [bots, Date.now()],
+        );
+        await client.query(MARK_APPS, [bots]);
+        await client.query(
+          `WITH app_sign_ins AS (
+             SELECT l.user_id, l.alias_id, l.evidence, l.alias_id = u.primary_alias AS is_primary,
+                    CASE WHEN l.alias_id = ANY($1::text[]) THEN 'bot'
+                         WHEN l.alias_id = ANY($2::text[]) THEN 'none'
+                         WHEN l.alias_id = ANY($3::text[]) THEN 'person' ELSE 'none' END AS signal
+               FROM user_links l JOIN users u ON u.id = l.user_id
+              WHERE u.kind = 'app'
+           ), people AS (
+             UPDATE users u SET kind = 'person'
+               FROM (SELECT user_id FROM app_sign_ins GROUP BY user_id HAVING bool_and(signal = 'person')) p
+              WHERE u.id = p.user_id
+           )
+           INSERT INTO audit_log(at, principal_id, action, resource, scope_label, detail, idempotency_key)
+           SELECT $4::bigint, 'system:directory-sync', 'user_sign_in_review', user_id::text, 'users', detail,
+                  'user_sign_in_review:' || user_id || ':' || md5(detail)
+             FROM (SELECT user_id, jsonb_build_object(
+                            'reason', CASE WHEN bool_or(signal = 'none') THEN 'some sign-ins have no certain signal'
+                                           ELSE 'the primary sign-in is not a person' END,
+                            'signIns', jsonb_agg(jsonb_build_object('alias', alias_id, 'evidence', evidence, 'signal', signal)
+                                                 ORDER BY is_primary DESC, alias_id))::text AS detail
+                     FROM app_sign_ins GROUP BY user_id
+                    HAVING count(*) > 1 AND NOT bool_and(signal = 'bot') AND NOT bool_and(signal = 'person')) r
+           ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+          [bots, signIns(undefined), signIns(false), Date.now()],
+        );
+        return split.rowCount ?? 0;
+      });
+    },
+    botSignIns: (aliases) => findBotSignIns(q, aliases),
+    async setDisplayName(alias, raw) {
+      const name = cleanDisplayName(raw);
+      if (!name) return false;
+      const user = await ensureUser(foldPrincipalId(alias));
       const rows = await q(
-        `UPDATE users SET kind = 'app'
-          WHERE kind <> 'app' AND id IN (SELECT user_id FROM user_links WHERE alias_id = ANY($1::text[]))
-          RETURNING id`,
-        [ids.map((id) => foldPrincipalId(id))],
+        `UPDATE users SET display_name = $2 WHERE id = $1 AND display_name IS DISTINCT FROM $2 RETURNING id`,
+        [user, name],
       );
-      return rows.length;
+      return rows.length > 0;
     },
     async markReactivated(id) {
       const rows = await q(

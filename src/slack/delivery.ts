@@ -1,7 +1,9 @@
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
-import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
+import type { WornPersona } from "../types.ts";
+import { emojiNameOf } from "./emoji-map.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -17,6 +19,7 @@ export interface SlackReplyArgs {
 export interface BotIdentityOverride {
   username?: string;
   icon_emoji?: string;
+  icon_url?: string;
 }
 
 export function botIdentityFromEnv(env: Record<string, string | undefined>): BotIdentityOverride {
@@ -28,16 +31,26 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
-let defaultIdentity: BotIdentityOverride = {};
+const defaultIdentity: { identity: BotIdentityOverride } = { identity: {} };
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  defaultIdentity = identity ?? {};
+  defaultIdentity.identity = identity ?? {};
 }
 
-export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity;
+function slackEmojiName(icon: WornPersona["icon"]): string | undefined {
+  if (icon?.kind === "custom") return icon.name;
+  if (icon?.kind === "emoji") return emojiNameOf(icon.value);
+  return undefined;
+}
+
+export function botIdentityArgs(persona?: WornPersona): BotIdentityOverride {
+  const id = defaultIdentity.identity;
+  const username = persona?.name.trim() || id.username;
+  if (persona?.icon?.kind === "image") return { ...(username ? { username } : {}), icon_url: persona.icon.url };
+  const personaEmoji = slackEmojiName(persona?.icon);
+  const icon_emoji = personaEmoji ? `:${personaEmoji}:` : id.icon_emoji;
   return {
-    ...(id.username ? { username: id.username } : {}),
-    ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),
+    ...(username ? { username } : {}),
+    ...(icon_emoji ? { icon_emoji } : {}),
   };
 }
 
@@ -45,7 +58,7 @@ export function slackReplyArgs(
   channel: string,
   text: string,
   threadTs: string | undefined,
-  opts: { threadOnly?: boolean; unfurlLinks?: boolean } = {},
+  opts: { threadOnly?: boolean; unfurlLinks?: boolean; persona?: WornPersona } = {},
 ): SlackReplyArgs {
   return {
     channel,
@@ -53,12 +66,12 @@ export function slackReplyArgs(
     ...(threadTs ? { thread_ts: threadTs } : {}),
     ...(threadTs && opts.threadOnly ? { reply_broadcast: false as const } : {}),
     ...(opts.unfurlLinks !== undefined ? { unfurl_links: opts.unfurlLinks, unfurl_media: opts.unfurlLinks } : {}),
-    ...botIdentityArgs(),
+    ...botIdentityArgs(opts.persona),
   };
 }
 
 export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: string): string | undefined {
-  const base = (webUiPublicUrl ?? "").trim().replace(/\/+$/, "");
+  const base = trimTrailingSlashes((webUiPublicUrl ?? "").trim());
   if (!base || !scopeId) return undefined;
   const personal = /^personal:([^@]+)@/.exec(scopeId);
   if (personal?.[1] && /^[a-z0-9._-]+$/i.test(personal[1])) return `${base}/projects/${personal[1].toLowerCase()}`;
@@ -350,7 +363,6 @@ export function createDeliveryTracker(
       const count = (failures.get(id) ?? 0) + 1;
       if (count >= maxAttempts) {
         failures.delete(id);
-        posted.delete(id);
         dead.set(id, Date.now() + giveUpRetryMs);
         capMap(dead, maxTracked);
         return true;
@@ -365,6 +377,13 @@ export function createDeliveryTracker(
       dead.delete(id);
     },
   };
+}
+
+export function slackRetryAfterMs(err: unknown): number | undefined {
+  const { code, retryAfter } = (err ?? {}) as { code?: unknown; retryAfter?: unknown };
+  if (code !== "slack_webapi_rate_limited_error") return undefined;
+  const ms = Number(retryAfter) * 1000;
+  return Number.isFinite(ms) ? ms : 0;
 }
 
 export async function deliverWithRetry(opts: {
@@ -383,6 +402,7 @@ export async function deliverWithRetry(opts: {
       tracker.markPosted(id, ackBody ?? undefined);
       postedState = tracker.posted(id);
     } catch (err) {
+      if (slackRetryAfterMs(err) !== undefined) throw err;
       opts.onError("post", err, tracker.recordFailure(id));
       return;
     }
@@ -468,10 +488,6 @@ export async function findPostedByKey(
     cursor = page.response_metadata?.next_cursor?.trim() || undefined;
   } while (cursor);
   return undefined;
-}
-
-export function statusPlaceholderKey(runId: string): string {
-  return `status:run:${runId}`;
 }
 
 export function recoveryVerifyOldest(createdAt: number | undefined, editRef: string | undefined): string | undefined {
@@ -561,19 +577,7 @@ export async function postWithVerify(
     } catch (err) {
       lastErr = err;
       const code = (err as { code?: string }).code;
-      if (code === "slack_webapi_platform_error") throw err;
-      if (code === "slack_webapi_rate_limited_error") {
-        const retryAfter = (err as { retryAfter?: number }).retryAfter ?? 1;
-        await sleep(retryAfter * 1000);
-
-        try {
-          const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
-          if (found) return { ...found, reused: true };
-        } catch {
-          /* verification is best-effort on this path */
-        }
-        continue;
-      }
+      if (code === "slack_webapi_platform_error" || code === "slack_webapi_rate_limited_error") throw err;
       let found: { ts: string; channel: string } | undefined;
       try {
         found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);

@@ -92,6 +92,18 @@ function withCallIds(emit: (item: NewItem) => Promise<Item>): RecordItem {
   };
 }
 
+const heldTurns = new Map<string, { turn: AgentTurnInput; release: () => void }>();
+
+export const mockHeldTurns = {
+  get(name: string): AgentTurnInput | undefined {
+    return heldTurns.get(name)?.turn;
+  },
+  release(name: string): void {
+    heldTurns.get(name)?.release();
+    heldTurns.delete(name);
+  },
+};
+
 export function createMockAgent(): Agent {
   const shedSessions = new Set<string>();
   const boomAlwaysSessions = new Set<string>();
@@ -169,6 +181,7 @@ export function createMockAgent(): Agent {
         approvalKey?: string;
         grantModes?: { session: boolean; always: boolean };
         summary?: string;
+        call?: { tool: string; input: Record<string, unknown> };
       }> = [];
       let pausedOnApproval = false;
       const gateTool = (tool: string): boolean => {
@@ -183,7 +196,37 @@ export function createMockAgent(): Agent {
         return true;
       };
 
-      if (turn.readOnly && READ_ONLY_BLOCKED_PREFIXES.some((prefix) => command0.startsWith(prefix))) {
+      if (turn.approvedToolCalls?.length) {
+        reply = "";
+        for (const approved of turn.approvedToolCalls) {
+          const allowed = turn.toolApprovalGate?.(approved.tool, toolCallApprovalKey(approved.tool, approved.input));
+          await turn.emit({
+            kind: "ToolCall",
+            tool: approved.tool,
+            callId: approved.callId,
+            body: { approvedRequestId: approved.requestId },
+          });
+          await turn.emit({
+            kind: "ToolResult",
+            tool: approved.tool,
+            callId: approved.callId,
+            isError: !allowed,
+            text: allowed ? `sent ${JSON.stringify(approved.input)}` : "[blocked: needs human approval]",
+            body: { approvedRequestId: approved.requestId },
+          });
+          usedTool = true;
+          reply = allowed ? `sent ${JSON.stringify(approved.input)}` : "[approved call blocked]";
+        }
+      } else if (command0.startsWith("!hold ")) {
+        const name = command0.slice("!hold ".length).trim();
+        await new Promise<void>((release) => heldTurns.set(name, { turn, release }));
+        reply = `released ${name}`;
+      } else if (command0.startsWith("!withdraw ")) {
+        const card = command0.slice("!withdraw ".length).trim();
+        const outcome = await turn.tools.withdrawApproval?.(card);
+        usedTool = true;
+        reply = outcome?.withdrawn.length ? `withdrew ${outcome.withdrawn.join("; ")}` : "nothing withdrawn";
+      } else if (turn.readOnly && READ_ONLY_BLOCKED_PREFIXES.some((prefix) => command0.startsWith(prefix))) {
         reply = "[strict/read-only posture: that tool is unavailable]";
       } else if (command0 === "!boom") {
         throw new Error("boom: simulated turn fault");
@@ -214,7 +257,7 @@ export function createMockAgent(): Agent {
           else turn.cancel.addEventListener("abort", () => resolve(), { once: true });
         });
         await recordStoppedTurn(turn, "");
-        return { reply: "(stopped)", stopped: true, modelCalls: 1 };
+        return { reply: "", stopped: true, modelCalls: 1 };
       } else if (command0.startsWith("!post-lost-result ")) {
         const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);
         await record({ kind: "ToolCall", tool: "slack", body: { action: "post", bytes: msg.length } });
@@ -252,7 +295,10 @@ export function createMockAgent(): Agent {
         );
       } else if (command0 === "!silent") {
         reply = "";
-      } else if (command0.startsWith("[system] You were addressed")) {
+      } else if (
+        command0.startsWith("[system] You were addressed") ||
+        command0.startsWith("[system] Your text above was not delivered")
+      ) {
         if (shedSessions.has(turn.session.id)) {
           reply = "worklog: did the thing but never posted";
         } else {
@@ -278,8 +324,8 @@ export function createMockAgent(): Agent {
         await record({ kind: "ToolCall", tool: "execute", body: { command: "check" } });
         await record({ kind: "ToolResult", tool: "execute", body: { ok: true } });
         usedTool = true;
-        silent = turn.pollFire === true;
-        reply = turn.pollFire ? "" : preamble;
+        silent = turn.replyOptional === true;
+        reply = turn.replyOptional ? "" : preamble;
       } else if (command0.startsWith("!phased-reply")) {
         await turn.onTextBlockStart?.("commentary");
         turn.onDelta?.("Checking.");
@@ -305,7 +351,7 @@ export function createMockAgent(): Agent {
         reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
       } else if (command0 === "!finish-silent") {
         usedTool = true;
-        silent = turn.pollFire === true || turn.surfaceTools === true;
+        silent = turn.replyOptional === true || turn.surfaceTools === true;
         reply = silent ? "" : "Nothing to report; ending silently.";
         if (silent) {
           await record({ kind: "ToolCall", tool: "finish_silently" });
@@ -313,7 +359,7 @@ export function createMockAgent(): Agent {
         }
       } else if (command0 === "!finish-silent-approval") {
         usedTool = true;
-        silent = turn.pollFire === true || turn.surfaceTools === true;
+        silent = turn.replyOptional === true || turn.surfaceTools === true;
         reply = silent ? "" : "I couldn't finish one check, but nothing to report.";
         collected.push({ command: "gated-check", reason: "requires approval" });
       } else if (command0 === "!cachemiss") {
@@ -407,9 +453,18 @@ export function createMockAgent(): Agent {
         pausedOnApproval = true;
         usedTool = true;
         reply = `about to run it`;
+      } else if (command0 === "!approval-note") {
+        reply = turn.approvalUnavailable ?? "approvals available";
+      } else if (command0.startsWith("!paused-approval-quiet ")) {
+        const command = command0.slice("!paused-approval-quiet ".length);
+        await record({ kind: "ToolCall", tool: "execute", body: { command, blocked: "needs_approval" } });
+        collected.push({ command, reason: "requires approval" });
+        pausedOnApproval = true;
+        usedTool = true;
+        reply = "";
       } else if (command0 === "!finish-silent-paused") {
         usedTool = true;
-        silent = turn.pollFire === true || turn.surfaceTools === true;
+        silent = turn.replyOptional === true || turn.surfaceTools === true;
         pausedOnApproval = true;
         collected.push({ command: "gated-check", reason: "requires approval" });
         reply = "";
@@ -461,8 +516,9 @@ export function createMockAgent(): Agent {
         }
         usedTool = true;
         reply = `ran ${ran}`;
-      } else if (command0.startsWith("!declared ")) {
-        const args = JSON.parse(command0.slice("!declared ".length)) as Record<string, unknown>;
+      } else if (command0.startsWith("!declared ") || command0.startsWith("!declared-noted ")) {
+        const noted = command0.startsWith("!declared-noted ");
+        const args = JSON.parse(command0.slice(command0.indexOf(" ") + 1)) as Record<string, unknown>;
         const callKey = toolCallApprovalKey("example_send", args);
         usedTool = true;
         if (turn.toolApprovalGate?.("example_send", callKey)) reply = `sent ${JSON.stringify(args)}`;
@@ -474,9 +530,10 @@ export function createMockAgent(): Agent {
             approvalKey: callKey,
             summary: "example_send",
             grantModes: { session: false, always: false },
+            call: { tool: "example_send", input: args },
           });
-          pausedOnApproval = true;
-          reply = "";
+          pausedOnApproval = !noted;
+          reply = noted ? "waiting on the approval card" : "";
         }
       } else if (command0.startsWith("!read ") && gateTool("read")) {
         usedTool = true;
@@ -501,6 +558,13 @@ export function createMockAgent(): Agent {
         const written = await turn.tools.memoryAdd([fact]);
         usedTool = true;
         reply = written === null ? "(memory unavailable)" : `remembered ${written.added}`;
+      } else if (command0.startsWith("!memoryforget ")) {
+        const ids = command0.slice("!memoryforget ".length).trim().split(" ");
+        usedTool = true;
+        reply = await turn.tools.memoryDelete(ids, "forget").then(
+          (forgot) => (forgot === null ? "(memory unavailable)" : `forgot ${forgot.forgotten}`),
+          (error: Error) => error.message,
+        );
       } else if (command0.startsWith("!skill-run ")) {
         const rest = command0.slice(11).trim();
         const sp = rest.indexOf(" ");
@@ -559,10 +623,12 @@ export function createMockAgent(): Agent {
           }
         }
         await record({ kind: "ToolCall", tool: "attach", body: { files: paths } });
-        const r = await turn.tools.attach(paths);
+        const r = await turn.tools.attach(
+          paths.map((p) => (p.startsWith("file_id:") ? { file_id: p.slice("file_id:".length) } : p)),
+        );
         await record({ kind: "ToolResult", tool: "attach", body: r.ok ? { ok: true, files: r.files } : { ok: false } });
         usedTool = true;
-        if (tag === "!attachsilent ") silent = turn.pollFire === true;
+        if (tag === "!attachsilent ") silent = turn.replyOptional === true;
         reply = r.ok ? "" : `[not attached] ${r.message}`;
       } else if (command0.startsWith("!reachchan ")) {
         const rest = cmd.slice(cmd.indexOf("!reachchan ") + "!reachchan ".length);
@@ -632,7 +698,6 @@ export function createMockAgent(): Agent {
         usedTool = true;
         reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
       } else if (command0.startsWith("!postfiles ")) {
-        // !postfiles <path>[,<path>...] <message>
         const rest = cmd.slice(cmd.indexOf("!postfiles ") + "!postfiles ".length);
         const sp = rest.indexOf(" ");
         const paths = (sp === -1 ? rest : rest.slice(0, sp)).split(",").filter(Boolean);
@@ -828,9 +893,10 @@ export function createMockAgent(): Agent {
     },
 
     judge(_systemPrompt: string, prompt: string): Promise<string | undefined> {
+      if (/!judge-outage\b/i.test(prompt)) return Promise.reject(new Error("mock judge outage"));
       const asked = /!engage-asked\b[:\s]*(.*)/i.exec(prompt);
       if (asked) {
-        const id = /^\[([^\]]+)\]/m.exec(prompt)?.[1];
+        const id = /<message id="([^"]+)"[^>]*trigger="true"/.exec(prompt)?.[1];
         return Promise.resolve(
           JSON.stringify({
             act: true,

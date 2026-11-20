@@ -2,8 +2,10 @@ import { fromJSONSchema, z, ZodObject } from "zod";
 import type { ClientToolDeclaration, SurfaceBriefing, TurnOrigin, TurnRequest } from "../../types.ts";
 import { promptText } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
+import { isTerminal } from "../../runs/run-store.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
+import { isClientSurface } from "../../../plugins/chassis/src/client-surface.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 function renderSurfaceBriefing(surface: SurfaceBriefing): string {
@@ -20,6 +22,7 @@ function renderSurfaceBriefing(surface: SurfaceBriefing): string {
 function isTurnRequest(body: unknown): body is TurnRequest {
   return (
     isObj(body) &&
+    typeof body.surface === "string" &&
     typeof body.text === "string" &&
     isObj(body.actor) &&
     typeof body.actor.externalId === "string" &&
@@ -103,35 +106,14 @@ function zodMessage(field: string, error: z.ZodError): string {
 
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   if (origin?.kind !== "automation") return origin;
-  const { useOwnerKeychain: _internalOnly, ...safe } = origin;
+  const { useOwnerKeychain: _internalOnly, ownerFire: _fireOnly, ...safe } = origin;
   return safe;
 }
 
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
-  if (body.deliveryWebhook !== undefined) {
-    const parsed = z
-      .object({
-        binding: z.uuid(),
-        url: z
-          .url({ protocol: /^https?$/ })
-          .refine((u) => u.startsWith("https:") || ["localhost", "127.0.0.1", "[::1]"].includes(new URL(u).hostname)),
-      })
-      .strict()
-      .safeParse(body.deliveryWebhook);
-    if (
-      !parsed.success ||
-      body.surfaceTools ||
-      body.surface !== "web" ||
-      body.conversation.kind !== "dm" ||
-      body.deliveryCandidates?.length ||
-      body.deliveryTarget !== body.conversation.threadRef
-    )
-      return { error: "invalid delivery webhook" };
-  }
   const {
     surfaceOrigin: _surfaceOrigin,
     spawned: _spawned,
-    unattendedGrants: _unattendedGrants,
     cronScript: _cronScript,
     infrequentCron: _infrequentCron,
     redeliveryKey: _redeliveryKey,
@@ -145,12 +127,15 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     return { error: "midTurn must be steer or queue" };
   if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
     return { error: "desktopClientId must be a UUID" };
+  if (rest.clientSurface !== undefined && !isClientSurface(rest.clientSurface))
+    return { error: "clientSurface must be browser, desktop or ios" };
   let clientTools: ClientToolDeclaration[] | undefined;
   if (rawClientTools !== undefined) {
     const parsed = clientToolsSchema.safeParse(rawClientTools);
     if (!parsed.success) return { error: zodMessage("clientTools", parsed.error) };
     clientTools = parsed.data;
   }
+  const { hostIds: _hostIds, ...callerGateway } = rest.gatewayContext ?? {};
   let conversationHeader = rest.conversationHeader;
   if (rawSurfaceBriefing !== undefined) {
     const parsed = surfaceBriefingSchema.safeParse(rawSurfaceBriefing);
@@ -160,6 +145,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   return {
     request: {
       ...rest,
+      ...(rest.gatewayContext ? { gatewayContext: callerGateway } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
       ...(origin ? { origin } : {}),
       ...(clientTools?.length ? { clientTools } : {}),
@@ -167,7 +153,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   };
 }
 
-async function postTurn(ctx: ApiCtx): Promise<void> {
+export async function postTurn(ctx: ApiCtx): Promise<void> {
   const { res, app, url, body } = ctx;
   if (!isTurnRequest(body)) {
     return sendJson(res, 400, { error: "bad_request", message: "expected a TurnRequest" });
@@ -206,7 +192,7 @@ async function postRunDeliveryState(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true });
 }
 
-async function postRunSignal(ctx: ApiCtx): Promise<void> {
+export async function postRunSignal(ctx: ApiCtx): Promise<void> {
   const { res, app, body, actor } = ctx;
   const id = ctx.params.id!;
   const kind = isObj(body) && typeof body.kind === "string" ? body.kind : "";
@@ -229,6 +215,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
   const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
   const ts = isObj(body) && typeof body.ts === "string" && body.ts ? body.ts : undefined;
   const tree = kind === "abort" && isObj(body) && body.tree === true;
+  const remark = kind === "steer" && isObj(body) && body.remark === true;
   let request: TurnRequest | undefined;
   if (isObj(body) && body.request !== undefined) {
     if (!isTurnRequest(body.request)) {
@@ -250,6 +237,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
       ...(request ? { request } : {}),
       ...(queuedRunId ? { queuedRunId } : {}),
       ...(tree ? { tree } : {}),
+      ...(remark ? { remark } : {}),
     },
     actor?.p,
   );
@@ -279,7 +267,9 @@ async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
   const threadRef = url.searchParams.get("threadRef") ?? "";
   if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
   const active = await app.activeRunForThread(threadRef, actor?.p);
-  return sendJson(res, 200, { runId: active?.runId ?? null, ...(active?.queued ? { queued: active.queued } : {}) });
+  const run = active && (await app.getRun(active.runId, actor?.p));
+  const live = active && run && !isTerminal(run.status) ? { runId: active.runId, run } : { runId: null, run: null };
+  return sendJson(res, 200, { ...live, ...(active?.queued ? { queued: active.queued } : {}) });
 }
 
 async function patchQueuedRun(ctx: ApiCtx): Promise<void> {
@@ -317,8 +307,10 @@ async function ackDelivery(ctx: ApiCtx): Promise<void> {
     isObj(body) && typeof body.slackApiMs === "number" && Number.isFinite(body.slackApiMs) && body.slackApiMs >= 0
       ? body.slackApiMs
       : undefined;
+  const messageTs =
+    isObj(body) && typeof body.messageTs === "string" && body.messageTs.trim() ? body.messageTs : undefined;
   if (recipientThreadRef) await app.recordPrincipalDelivery(id, recipientThreadRef);
-  await app.ackDelivery(id, slackApiMs);
+  await app.ackDelivery(id, slackApiMs, messageTs);
   return sendJson(res, 200, { ok: true });
 }
 
@@ -342,10 +334,24 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: postRunDeliveryState,
   },
   { method: "POST", path: "/v1/runs/:id/signal", auth: "source", maxBodyBytes: 6_000_000, handle: postRunSignal },
-  { method: "PATCH", path: "/v1/runs/:id/input", auth: "source", handle: patchQueuedRun },
-  { method: "POST", path: "/v1/runs/:id/withdraw", auth: "source", handle: postRunWithdraw },
-  { method: "GET", path: "/v1/runs/:id", actor: "person", auth: "source", handle: getRun },
-  { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
+  {
+    method: "PATCH",
+    path: "/v1/runs/:id/input",
+    browser: "self",
+    actor: "person",
+    auth: "source",
+    handle: patchQueuedRun,
+  },
+  {
+    method: "POST",
+    path: "/v1/runs/:id/withdraw",
+    browser: "embed",
+    actor: "person",
+    auth: "source",
+    handle: postRunWithdraw,
+  },
+  { method: "GET", path: "/v1/runs/:id", browser: true, actor: "person", auth: "source", handle: getRun },
+  { method: "GET", path: "/v1/runs", browser: true, actor: "person", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
   { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
   { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },

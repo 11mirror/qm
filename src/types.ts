@@ -1,7 +1,9 @@
+import type { ClientSurface } from "../plugins/chassis/src/client-surface.ts";
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
 import type { SessionOrigin } from "./sessions/session-store.ts";
+import type { ProjectIcon } from "./projects/project-store.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -18,7 +20,7 @@ export interface Principal {
   displayName?: string;
 }
 
-const SCOPE_KINDS = ["personal", "channel", "team", "org", "group"] as const;
+export const SCOPE_KINDS = ["personal", "channel", "team", "org", "group", "persona"] as const;
 export type ScopeKind = (typeof SCOPE_KINDS)[number];
 
 export type ScopeId = string;
@@ -31,6 +33,12 @@ export function scopeId(kind: ScopeKind, ref: string): ScopeId {
   return `${kind}:${ref}`;
 }
 
+export interface WornPersona {
+  id: string;
+  name: string;
+  icon?: ProjectIcon;
+}
+
 export function personalScope(principalId: string): ScopeId {
   return scopeId("personal", principalId);
 }
@@ -41,6 +49,10 @@ export function scopeActor(scope: ScopeId): string {
 
 export function actsAsScope(principalId: string, scope: ScopeId): boolean {
   return principalId === scopeActor(scope);
+}
+
+export function isSystemActor(actorId: string | undefined): boolean {
+  return !!actorId?.startsWith("system:");
 }
 
 export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
@@ -104,9 +116,9 @@ export interface ChildIsolation {
 export interface SpawnMeta {
   surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
+  liveReplies?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
-  unattendedGrants?: string[];
   openFingerprint?: string;
   scopeVersion?: string;
   sessionParticipantIds?: readonly string[];
@@ -114,13 +126,16 @@ export interface SpawnMeta {
   conversation: Conversation;
   actor: Principal;
   deliveryTarget?: string;
-  deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
+  memoryNotebookOnly?: boolean;
+  botActor?: boolean;
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
   isolation?: ChildIsolation;
+  persistent?: boolean;
+  retired?: boolean;
 }
 
 export interface Session {
@@ -143,8 +158,10 @@ export interface Session {
   parentSessionId?: string;
   origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
+  botWork?: true;
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
+  personaId?: string;
   lastActivityAt?: number;
   hasEntries?: boolean;
   working?: boolean;
@@ -172,6 +189,7 @@ export interface Resolution {
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
   guidance?: string;
+  soulScopeId?: ScopeId;
 }
 
 export type Permission = "read" | "write";
@@ -192,13 +210,7 @@ export interface GrantedHandle {
   permission: Permission;
 }
 
-export interface DeliveryWebhook {
-  binding: string;
-  url: string;
-}
-
 export interface Destination {
-  webhook?: DeliveryWebhook;
   account?: SurfaceAccount;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
@@ -209,6 +221,8 @@ export interface Destination {
   audienceScopeId?: ScopeId;
   onBehalfOf?: string;
   relaySender?: string;
+  persona?: WornPersona;
+  project?: { id: string; name: string };
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;
@@ -221,7 +235,7 @@ export interface Destination {
   editNote?: string;
   webTranscript?:
     | { kind: "reply" }
-    | { kind: "slack_reply"; sessionId: string; ts: string; name: string }
+    | { kind: "slack_reply"; sessionId: string; ts: string; name: string; speakerId: string }
     | { kind: "turn_failure"; notBefore: number; runId?: string };
 }
 
@@ -233,8 +247,6 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
-  sourceRequestId?: string;
-  sourceRunId?: string;
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;
@@ -261,6 +273,7 @@ export interface Delivery {
   recipientThreadRef?: string;
   deliverLatencyMs?: number;
   slackApiMs?: number;
+  messageTs?: string;
 }
 
 export interface EgressPolicy {
@@ -315,21 +328,23 @@ export interface AttachmentMeta {
 export interface GatewayContext {
   location?: string;
   details?: Record<string, string>;
+  hostIds?: Record<string, string>;
   instructions?: string;
   reactionGuidance?: string;
   botHandle?: string;
 }
 
 export interface ConversationTurn {
-  role: "user" | "assistant";
+  role: "user" | "bot" | "assistant";
   name?: string;
   text: string;
 }
 
 export interface OverheardMessage {
   ts: string;
-  role: "user" | "self";
+  role: "user" | "bot" | "self";
   name?: string;
+  speakerId?: string;
   text: string;
   files?: string[];
   mentions?: Record<string, string>;
@@ -343,6 +358,7 @@ export type TurnOrigin =
       screenData?: string;
       destination?: Destination;
       useOwnerKeychain?: boolean;
+      ownerFire?: true;
     }
   | { kind: "direct" };
 
@@ -362,6 +378,7 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
+  clientSurface?: ClientSurface;
   midTurn?: "steer" | "queue";
   surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;
@@ -371,7 +388,6 @@ export interface TurnRequest {
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;
-  deliveryWebhook?: DeliveryWebhook;
   deliveryCandidates?: { target: string; label: string }[];
   actor: ActorAssertion;
   conversation: {
@@ -387,9 +403,9 @@ export interface TurnRequest {
   text: string;
   origin?: TurnOrigin;
   gatewayContext?: GatewayContext;
-  unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
   infrequentCron?: boolean;
+  personaId?: string;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
@@ -403,15 +419,16 @@ export interface TurnRequest {
   fastMode?: boolean;
   readOnly?: boolean;
   skipMemory?: boolean;
+  memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   addressed?: boolean;
+  liveReplies?: boolean;
   envelopeWrapped?: boolean;
   displayText?: string;
   turnWallClockMs?: number;
   timezone?: string;
   approval?: { requestId: string; approved: boolean; scope?: ApprovalScope; optionId?: string };
   proactiveOpener?: boolean;
-  analyticsSuppressed?: boolean;
   spawned?: boolean;
   idempotencyKey?: string;
   redeliveryKey?: string;
@@ -440,7 +457,15 @@ export interface PendingApproval {
   grantModes?: ApprovalGrantModes;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  executesOnApprove?: boolean;
 }
+
+export interface ApprovedToolCallSpec {
+  tool: string;
+  input: Record<string, unknown>;
+}
+
+export const APPROVAL_LIFETIME_MS = 60 * 60_000;
 
 export interface PendingApprovalRecord {
   screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };
@@ -455,8 +480,10 @@ export interface PendingApprovalRecord {
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
+  homeChannel?: string;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  call?: ApprovedToolCallSpec;
 }
 
 type ApprovalScope = "once" | "session" | "always";
@@ -489,7 +516,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only" | "linked_bot";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;
@@ -504,4 +531,5 @@ export interface TurnResult {
   runtime?: TurnRuntime;
   scriptVerdict?: string;
   retracted?: string[];
+  persona?: WornPersona;
 }

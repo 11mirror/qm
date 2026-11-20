@@ -17,6 +17,15 @@ export function tailSlice(s: string, n: number): string {
   return /^[\uDC00-\uDFFF]/.test(cut) ? cut.slice(1) : cut;
 }
 
+export function clampUtf8(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const encoded = Buffer.from(text, "utf8");
+  if (encoded.length <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0 && (encoded[end]! & 0xc0) === 0x80) end -= 1;
+  return encoded.subarray(0, end).toString("utf8");
+}
+
 export function pgTextSafe(s: string): string {
   return s.replaceAll("\u0000", "").toWellFormed();
 }
@@ -49,6 +58,18 @@ export function untrustedText(value: string): string {
     .replaceAll("</", "<\\/");
 }
 
+export function tryDecodeUtf8(bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+export function flatText(value: string): string {
+  return value.replace(/[\s\u0085]+/g, " ").trim();
+}
+
 export function quotedData(value: string): string {
   const lines = untrustedText(value)
     .split("\n")
@@ -57,4 +78,14 @@ export function quotedData(value: string): string {
       return text.startsWith("#") && "# \t".includes(text[1] ?? " ") ? `\\${line}` : line;
     });
   return ["```untrusted-data", ...lines, "```"].join("\n");
+}
+
+export function trimTrailing(s: string, strip: (char: string) => boolean): string {
+  let end = s.length;
+  while (end > 0 && strip(s[end - 1]!)) end--;
+  return s.slice(0, end);
+}
+
+export function trimTrailingSlashes(s: string): string {
+  return trimTrailing(s, (char) => char === "/");
 }

@@ -19,6 +19,7 @@ import {
   KeychainError,
   type Keychain,
   type KeychainGrant,
+  type KeychainCredential,
 } from "../src/credentials/keychain.ts";
 import { type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
 import { envKey } from "../src/credentials/connector-token.ts";
@@ -31,6 +32,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -242,7 +244,7 @@ test("legacy retry grants remain consumed and invalidate prepared uses", async (
   });
   const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
   await grants.put(grant.id, { ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
-  assert.equal((await k.grantsForScope("channel:C1")).length, 0);
+  assert.equal((await k.grantsForScope("channel:C1", { includePersonGrants: true })).length, 0);
   for (const actor of ["U2", "U3"])
     await assert.rejects(materializeGrant(k, grant.id, "channel:C1", actor), (e: KeychainError) => e.status === 410);
   await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
@@ -489,6 +491,46 @@ describe("connectors are grantable like any keychain record", () => {
     });
     assert.doesNotMatch(md, /Alex|gmail|[a-f0-9]{16}/);
   });
+});
+
+test("a save keeps a writer lease claimed while the save runs", async () => {
+  const creds = testMap<KeychainCredential>();
+  const keychain = (map: DurableMap<KeychainCredential>) =>
+    createKeychain({ lock: testAdvisoryLock(), creds: map, grants: testMap(), asks: testMap(), key: KEY });
+  const k = keychain(creds);
+  const { id } = await k.save(GH);
+  const writer = { holder: "A", until: Date.now() + 60_000 };
+  const claim = () => k.claimWriter(GH.ownerId, id, writer);
+  const get = async (key: string) => [await creds.get(key), await claim()][0] as KeychainCredential | null;
+  const mutateMany: typeof creds.mutateMany = async (updates) =>
+    (await Promise.all([creds.mutateMany(updates), claim()]))[0];
+  await keychain({ ...creds, get, mutateMany }).save(GH);
+  assert.deepEqual((await creds.get(id))?.writer, writer);
+});
+
+test("revoking a once-grant that is claimed mid-revoke keeps it used", async () => {
+  const grants = testMap<KeychainGrant>();
+  const k = createKeychain({ lock: testAdvisoryLock(), creds: testMap(), grants, asks: testMap(), key: KEY });
+  const cred = await k.save(GH);
+  const grant = await k.createGrant({
+    credentialId: cred.id,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "once",
+    purpose: "clone once",
+  });
+  const get = grants.get.bind(grants);
+  let raced = false;
+  grants.get = async (id) => {
+    const seen = await get(id);
+    if (!raced && seen?.status === "active") {
+      raced = true;
+      await materializeGrant(k, grant.id, "channel:C1", "U2");
+    }
+    return seen;
+  };
+  assert.equal(await k.revokeGrant("U1", grant.id), true);
+  assert.equal((await get(grant.id))!.status, "used");
 });
 
 test("standing grants are reusable, revocable, and die with the credential", async () => {
@@ -1050,7 +1092,8 @@ describe("/v1/keychain routes (capability-authed)", () => {
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
       sessions: built.sessions,
-      runs: built.runs,
+      runs: liveRunStore(built.runs),
+      secretDrops: built.secretDrops,
       signals: built.signals,
       identity: built.identity,
     });
@@ -1110,9 +1153,9 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(saved.credential.credentialHandle, metadata.credentials[0].credentialHandle);
     assert.ok(!JSON.stringify([saved, metadata]).includes("synthetic-handle-secret"));
     const grant = await grantHere(saved.credential.id, owner, scopeId("personal", owner), "once", "use the handle");
-    const current = (await built.keychain!.grantsForScope(scopeId("personal", owner))).find(
-      ({ grant: g }) => g.id === grant.id,
-    );
+    const current = (
+      await built.keychain!.grantsForScope(scopeId("personal", owner), { includePersonGrants: true })
+    ).find(({ grant: g }) => g.id === grant.id);
     assert.equal(current?.credential.credentialHandle, saved.credential.credentialHandle);
     const prepared = await built.keychain!.prepareMaterialize(grant.id, scopeId("personal", owner), owner);
     assert.equal(prepared.materialized.kind, "env");
@@ -1275,6 +1318,59 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(body.connectorCredentials[0].credentialId, connector.credentialId);
     assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
     assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
+  });
+  it("replacing a saved login needs the owner's running turn or a one-time ticket that turn started", async () => {
+    const owner = "RELOGIN_OWNER";
+    const later = await capFor(owner, undefined, { triggered: true, threadRef: "dm:live" });
+    const save = (secret: string, cap: string, loginTicket?: string) =>
+      post("/v1/keychain/credentials", { service: "gh", secret, ...(loginTicket ? { loginTicket } : {}) }, cap);
+    const { credential } = (await (await save("first", later)).json()) as any;
+    const secret = () => built.keychain!.readOwnSecret(owner, credential.id);
+
+    assert.equal((await save("swapped", later)).status, 403);
+    assert.equal((await save("swapped", await capFor(owner, undefined, { botActor: true }))).status, 403);
+    assert.equal((await post("/v1/keychain/login-tickets", { service: "gh" }, later)).status, 403);
+    assert.equal(await secret(), "first");
+
+    const live = await capFor(owner, undefined, liveRunClaims(owner));
+    const { dropId } = (await (await post("/v1/keychain/drops", { service: "gh", purpose: "p" }, live)).json()) as any;
+    assert.equal((await save("swapped", later, dropId)).status, 403);
+    assert.equal((await built.secretDrops!.peek(dropId)).ok, true);
+    const { loginTicket } = (await (await post("/v1/keychain/login-tickets", { service: "GH" }, live)).json()) as any;
+    const racing = await Promise.all([save("relogin", later, loginTicket), save("relogin", later, loginTicket)]);
+    assert.deepEqual(racing.map((response) => response.status).sort(), [200, 403]);
+    assert.equal(await secret(), "relogin");
+    assert.equal((await save("typed", live)).status, 200);
+    assert.equal(await secret(), "typed");
+
+    const ended = await capFor(owner, undefined, { ...liveRunClaims(owner), runId: "ended-run" });
+    assert.equal((await save("swapped", ended)).status, 403);
+    const next = (await (await post("/v1/keychain/login-tickets", { service: "gh" }, live)).json()) as any;
+    assert.equal((await save("after the turn", ended, next.loginTicket)).status, 200);
+    assert.equal(await secret(), "after the turn");
+  });
+
+  it("a credential's writer lease admits one holder until it is released or ends", async () => {
+    const owner = "LEASE_OWNER";
+    const cap = await capFor(owner, undefined, { triggered: true });
+    const { credential } = (await (
+      await post("/v1/keychain/credentials", { service: "kernel-profile", envKey: "KERNEL_PROFILE", secret: "p" }, cap)
+    ).json()) as any;
+    const path = `/v1/keychain/credentials/${credential.id}/writer`;
+    const claim = async (holder: string, until = Date.now() + 60_000, as = cap) =>
+      (await post(path, { holder, until }, as)).status;
+    const release = async (holder: string) =>
+      (await fetch(`${base}${path}?holder=${holder}`, { method: "DELETE", headers: { "x-agent-capability": cap } }))
+        .status;
+
+    assert.equal(await claim("a"), 200);
+    assert.equal(await claim("b"), 409);
+    assert.equal(await claim("b", undefined, await capFor("U2")), 404);
+    assert.equal(await release("b"), 409);
+    assert.equal(await claim("b"), 409);
+    assert.equal(await release("a"), 200);
+    assert.equal(await claim("b", Date.now() - 1), 200);
+    assert.equal(await claim("c"), 200);
   });
 });
 

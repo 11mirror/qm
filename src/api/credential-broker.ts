@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
 import { randomBytes } from "node:crypto";
@@ -6,16 +7,19 @@ import {
   netSuiteTbaAuthorization,
   parseNetSuiteTbaSecret,
 } from "../credentials/netsuite-tba.ts";
-import { attestableActor, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
+import {
+  ACTOR_HEADERS,
+  attestableActor,
+  attestedActorHeaders,
+  attestsInAudience,
+  OutsideAudience,
+  UNATTESTABLE_ACTOR_FIX,
+} from "../directory/person.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
-import {
-  credentialInjectionError,
-  credentialRequestHeaders,
-  type DecryptedServiceCredential,
-  type ServiceCredentialReader,
-} from "../credentials/keychain.ts";
+import type { DecryptedServiceCredential, ServiceCredentialReader } from "../credentials/keychain.ts";
+import { credentialInjectionError, credentialRequestHeaders } from "../credentials/credential-injection.ts";
 
 export interface BrokerFetchResponse {
   status: number;
@@ -175,6 +179,7 @@ export async function grantedCredential(
 }
 
 export async function brokerCredentialCall(opts: {
+  tenant: Tenant;
   claims: CapabilityClaims;
   body: BrokerRequest;
   orgScopeId: ScopeId;
@@ -185,13 +190,19 @@ export async function brokerCredentialCall(opts: {
   nonce?: () => string;
   now?: () => number;
 }): Promise<BrokerResult> {
-  const { claims, body, orgScopeId, reader, fetchImpl } = opts;
+  const { tenant, claims, body, orgScopeId, reader, fetchImpl } = opts;
   const slug = typeof body.credential === "string" ? body.credential : "";
   const method = (typeof body.method === "string" ? body.method : "GET").toUpperCase();
   const rawUrl = typeof body.url === "string" ? body.url : "";
 
   const deny = (httpStatus: number, code: string, message: string, host: string): BrokerResult => {
-    opts.usage?.record({ slug, host, status: "denied", scopeLabel: claims.scopeId, principalId: claims.actorId });
+    opts.usage?.record(tenant, {
+      slug,
+      host,
+      status: "denied",
+      scopeLabel: claims.scopeId,
+      principalId: claims.actorId,
+    });
     opts.audit?.({
       principalId: claims.actorId,
       action: "credential.broker.denied",
@@ -215,13 +226,25 @@ export async function brokerCredentialCall(opts: {
   if (
     body.headers &&
     typeof body.headers === "object" &&
-    Object.keys(body.headers).some((key) => key.toLowerCase() === "x-qm-actor")
+    Object.keys(body.headers).some((key) => ACTOR_HEADERS.includes(key.toLowerCase()))
   ) {
-    return deny(400, "reserved_header", "x-qm-actor is set only by the broker", rec.host);
+    return deny(400, "reserved_header", "actor headers are set only by the broker", rec.host);
   }
   const actor = attestableActor(claims.actorId);
   if (rec.injection?.actor && !actor) {
     return deny(403, "invalid_actor", `actor identity cannot be attested. ${UNATTESTABLE_ACTOR_FIX}`, rec.host);
+  }
+  if (
+    rec.injection?.actor &&
+    !attestsInAudience(
+      rec.injection.audience,
+      actor,
+      claims.deployment ? claims.scopeId : claims.audienceScopeId,
+      claims,
+    )
+  ) {
+    const refusal = new OutsideAudience("this credential");
+    return deny(403, refusal.code, refusal.message, rec.host);
   }
   let parsed: URL;
   try {
@@ -255,7 +278,7 @@ export async function brokerCredentialCall(opts: {
     let admitted: boolean;
     try {
       if (!opts.usage) throw new Error("no usage ledger");
-      admitted = await opts.usage.admitDailyCall(slug, rec.maxRequestsPerDay);
+      admitted = await opts.usage.admitDailyCall(tenant, slug, rec.maxRequestsPerDay);
     } catch (err) {
       console.error(`[credential-broker] daily cap check failed for ${slug}:`, errMessage(err));
       return deny(503, "daily_cap_unavailable", "the credential's daily request cap could not be checked", rec.host);
@@ -300,7 +323,7 @@ export async function brokerCredentialCall(opts: {
     });
     return deny(503, "invalid_injection", "credential injection configuration is invalid", rec.host);
   }
-  if (rec.injection?.actor && actor) headers["x-qm-actor"] = actor;
+  if (rec.injection?.actor && actor) Object.assign(headers, attestedActorHeaders(actor));
 
   let resp: BrokerFetchResponse;
   try {
@@ -310,7 +333,7 @@ export async function brokerCredentialCall(opts: {
       ...(typeof body.body === "string" ? { body: body.body } : {}),
     });
   } catch (err) {
-    opts.usage?.record({
+    opts.usage?.record(tenant, {
       slug,
       host: rec.host,
       status: "error",
@@ -329,7 +352,7 @@ export async function brokerCredentialCall(opts: {
   }
 
   const result = await relayedResult(resp);
-  opts.usage?.record({
+  opts.usage?.record(tenant, {
     slug,
     host: rec.host,
     status: "ok",

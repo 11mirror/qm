@@ -26,6 +26,16 @@ test("normalizeReaction accepts a bare name, strips colons, and lowercases", () 
   assert.equal(normalizeReaction("thumbsup::skin-tone-3"), "thumbsup::skin-tone-3");
 });
 
+test("normalizeReaction strips a long run of trailing colons promptly", () => {
+  assert.equal(normalizeReaction(":smile::"), "smile");
+  assert.equal(normalizeReaction("thumbsup::skin-tone-3::"), "thumbsup::skin-tone-3");
+  const started = performance.now();
+  const name = normalizeReaction(`smile${":".repeat(100_000)}x`);
+  const elapsedMs = performance.now() - started;
+  assert.equal(name, null);
+  assert.ok(elapsedMs < 1_000, `normalizeReaction took ${Math.round(elapsedMs)} ms`);
+});
+
 test("normalizeReaction maps a literal unicode emoji to its Slack short-name", () => {
   assert.equal(normalizeReaction("👀"), "eyes");
   assert.equal(normalizeReaction("✅"), "white_check_mark");
@@ -295,6 +305,7 @@ test("shouldSurfaceReaction drops the bot's OWN reactions (no loop) and non-mess
 
 test("buildReactionTurnText: a reaction on the bot's message quotes it and lists the current emoji", () => {
   const text = buildReactionTurnText({
+    surfaceLabel: "Slack",
     reactorName: "Alice",
     emoji: "white_check_mark",
     added: true,
@@ -312,6 +323,7 @@ test("buildReactionTurnText: a reaction on the bot's message quotes it and lists
 
 test("buildReactionTurnText: another author's message uses their name; no text → no quote", () => {
   const text = buildReactionTurnText({
+    surfaceLabel: "Slack",
     reactorName: "Carol",
     emoji: "tada",
     added: true,
@@ -321,13 +333,20 @@ test("buildReactionTurnText: another author's message uses their name; no text �
   assert.match(text, /Carol reacted with :tada: on project-alpha's message\.$/);
   assert.ok(!text.includes('"'));
   assert.match(
-    buildReactionTurnText({ reactorName: "Carol", emoji: "tada", added: true, onBotMessage: false }),
+    buildReactionTurnText({
+      surfaceLabel: "Slack",
+      reactorName: "Carol",
+      emoji: "tada",
+      added: true,
+      onBotMessage: false,
+    }),
     /on a message\.$/,
   );
 });
 
 test("buildReactionTurnText: a removal reads as 'removed their … reaction from' (and never lists current emoji)", () => {
   const text = buildReactionTurnText({
+    surfaceLabel: "Slack",
     reactorName: "Alice",
     emoji: "white_check_mark",
     added: false,
@@ -342,6 +361,7 @@ test("buildReactionTurnText: a removal reads as 'removed their … reaction from
 test("buildReactionTurnText clips a long quoted message", () => {
   const long = "x".repeat(500);
   const text = buildReactionTurnText({
+    surfaceLabel: "Slack",
     reactorName: "U",
     emoji: "eyes",
     added: true,

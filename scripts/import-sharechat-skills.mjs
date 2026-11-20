@@ -43,7 +43,6 @@ const packsBacking = maps.map("skill_packs");
 const skillStore = createSkillStore({ backing: skillsBacking });
 const packStore = createSkillPackStore({ backing: packsBacking });
 
-// 1. Create or retrieve the pack record
 const existingPacks = await packStore.list();
 let pack = existingPacks.find((p) => p.url === `file://${repoRoot}`);
 if (!pack) {
@@ -63,7 +62,6 @@ if (!pack) {
   console.log(`Found existing skill pack record: ${pack.id}`);
 }
 
-// 2. Perform importPack
 const repo = { commit: "acbd4e338d18637acdfbc2edcc2409ccbbc5d830", files };
 const existingSkills = await skillStore.list();
 const inScopeNames = new Set(

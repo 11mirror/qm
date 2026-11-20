@@ -20,6 +20,7 @@ import { SHARED_SKILL_TRIGGER_REFUSAL } from "../src/api/artifact-share.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { SKILL_NAME_RULE } from "../src/skills/skill-name.ts";
 import { sleep } from "../src/util/async.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 function start() {
   const built = buildApp(
@@ -530,16 +531,18 @@ async function startSecure() {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
     config: built.config,
+    runs: liveRunStore(),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true) =>
+  const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true, botActor = false) =>
     mintCapabilityToken(
       {
         actorId,
         scopeId: scope,
         aud: CONTROL_PLANE_AUD,
-        ...(liveActor ? { liveActor: true } : {}),
+        ...(liveActor ? liveRunClaims(actorId) : {}),
+        ...(botActor ? { botActor: true } : {}),
         exp: Date.now() + CAPABILITY_TTL_MS,
       },
       SECRET,
@@ -1229,6 +1232,37 @@ test("skill detail and restore capability calls hide other principals' skills an
   }
 });
 
+test("only a live person can restore an archived channel skill, not a Slack bot's turn or a trigger", async () => {
+  const srv = await startSecure();
+  try {
+    await srv.directory.replaceChannels(
+      [{ channelId: "C9", name: "eng", isPrivate: true }],
+      ["U1", "U2", "release-bot"].map((principalId) => ({ channelId: "C9", principalId })),
+    );
+    const skill = await srv.skills.create({
+      scopeId: scopeId("channel", "C9"),
+      manifest: { name: "retired", description: "theirs", requiredCapabilities: [], body: "# retired" },
+      createdBy: "U1",
+    });
+    await srv.skills.review(skill.id, "reviewer-1", []);
+    await srv.skills.publish(skill.id);
+    await srv.skills.archive(skill.id);
+    const restore = async (token: string) =>
+      (
+        await fetch(`${srv.base}/v1/skills/${skill.id}/restore`, {
+          method: "POST",
+          headers: { "x-agent-capability": token },
+        })
+      ).status;
+    assert.equal(await restore(await srv.cap("release-bot", scopeId("channel", "C9"), true, true)), 403);
+    assert.equal(await restore(await srv.cap("U2", scopeId("channel", "C9"), false)), 403);
+    assert.equal((await srv.skills.get(skill.id))?.status, "archived");
+    assert.equal(await restore(await srv.cap("U2", scopeId("channel", "C9"))), 200);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("the skills tool saves a skill into the turn's scope and edits it through the skill API", async () => {
   const srv = await startSecure();
   try {
@@ -1339,6 +1373,8 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
   const SECRET = "skills-turn-cap-secret".repeat(3);
   const mock = createMockAgent();
   const seen: ToolContext[] = [];
+  const save = { action: "save", name: "from-a-turn", description: "d", body: "# b" } as const;
+  let saved = "";
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "skills-turn-")),
@@ -1351,8 +1387,9 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
     {
       agent: {
         ...mock,
-        runTurn: (input) => {
+        runTurn: async (input) => {
           seen.push(input.tools);
+          if (input.tools.selfApi) saved = await skillsTool(input.tools.selfApi)(save);
           return mock.runTurn(input);
         },
       },
@@ -1363,6 +1400,7 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
     signingSecret: SECRET,
     capabilitySecret: SECRET,
     config: built.config,
+    runs: built.runs,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -1391,12 +1429,8 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
       });
     assert.equal((await turn(false)).status, "ok");
     assert.equal((await turn(true)).status, "ok");
-    const [live, readOnly] = seen;
-    assert.equal(readOnly!.selfApi, undefined);
-    assert.match(
-      await skillsTool(live!.selfApi)({ action: "save", name: "from-a-turn", description: "d", body: "# b" }),
-      /^Saved skill from-a-turn/,
-    );
+    assert.equal(seen[1]!.selfApi, undefined);
+    assert.match(saved, /^Saved skill from-a-turn/);
     const sk = (await built.skills.list()).find((s) => s.manifest.name === "from-a-turn");
     assert.equal(sk?.scopeId, scopeId("channel", "C9"));
     assert.equal(sk?.createdBy, "avery");

@@ -72,6 +72,8 @@ A chunk whose score is at or above its threshold resolves to Strict, and any Str
 
 `secretEnv.core.SPEND_EXPORT_TOKEN` (at least 32 characters, without surrounding whitespace, and distinct from every other environment value) turns on `GET /v1/spend/export?from=YYYY-MM-DD&to=YYYY-MM-DD` for an external spend or chargeback system. Requests send `Authorization: Bearer <token>`; the window is whole UTC days, half-open, and at most 93 days long. The response carries `scopeId`, the `window`, `asOf` when the report is served from saved daily totals, `rows` at the Spend page's ledger grain — one per UTC day, scope, source, cron and model — each with `scopeId`, `kind`, `principalId` (people only, after identity links), `displayName`, `source` (`live`, or the background kind: `cron`, `loop`, `swarm`, `webhook` or `monitor`), `cronId` (the cron that ran it, including its subagents' calls, else `null`), `calls`, `costUsd` and the four token counts, and `crons`: each billed cron's `id`, `title`, `owner`, `ownerScopeId`, `schedule`, `enabled` and `archived`, without its task. A deleted cron keeps its `cronId` on rows but has no `crons` entry. `costUsd` is the same estimate the admin Spend page shows, not a provider bill. Without the secret the route answers 404, and every export is audited as `spend.export`. Callers may use the public URL; the front door forwards this route to core.
 
+The same token turns on `GET /v1/apps/export?principalId=<id>`, so an external directory can show a person the apps they can open. It answers with the `principalId` it checked and `apps`: the apps on that person's Apps page that are not archived (their own, and those shared with them, with a channel, team or group they belong to, or with the org), with `id`, `name` and `displayName` when set, `url` (or `null`), `createdBy`, `owned` (the app lives in the person's personal scope; otherwise it reaches them through a share, even if they created it), the person's `permission` (`read` or `write`), and `updatedAt`, `lastAccessAt` (anyone's last open) and `viewedAt` (this person's last signed-in page load) in epoch milliseconds when known. Opening an app still goes through the app's own access check. Every request is audited as `app.export` with the person as its resource, and the front door forwards this route to core too.
+
 ## Secrets
 
 First-party services publish a typed `SecretSpec` schema. The CLI combines the enabled services and feature predicates with plugin `secrets` and `sandbox.secretEnv` to form the computed secret set. That same schema determines which task receives each secret. Core validates its own required runtime secrets at production boot.
@@ -184,12 +186,17 @@ The destination receives the configured credential, never the deployment token.
 A publisher can let their app call any of their connected apps (mail, calendar, chat,
 files, and so on) as them, the same way apps use org credentials through the broker.
 Nothing is lent by default. The publisher opts in per app and per connected-app host with
-`POST /v1/deployments/:id/connectors` and `{"connectors": ["<host>", ...]}`; `[]`
-withdraws. Only the publisher may call it, from a live turn or a signed-in session. Public
+`POST /v1/apps/:id/connectors` and `{"connectors": ["<host>", ...]}`; `[]`
+withdraws. Only the publisher may call it, from a live turn or a signed-in session, and
+sharing the app (`POST /v1/shares/deploy/:id`, or `POST /v1/share` for a deploy) takes the
+same: an app's sharees reach the connectors it borrows. Public
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
-withdrawn before that version runs. The token comes from the publisher's personal
-connection, else their default, else their company one.
+withdrawn before that version runs. Moving the app out of the publisher's own library, to
+a teammate or a shared home, withdraws it as the app moves, and an app outside that library
+can't borrow again until it moves back; `[]` still withdraws. While the app borrows
+connectors, only the publisher can share it with anyone else. The token comes from the
+publisher's personal connection, else their default, else their company one.
 
 The app's server sends the broker `connector` (the host) instead of `credential`, with
 the same `url`, `method`, `headers` and `body`. The broker pins the URL to that exact host
@@ -216,6 +223,12 @@ and listener precedence, including native blue/green weighted routing. Update
 vendored Terraform with the `public_paths` service attribute and
 `public_path_services` routing before enabling this setting.
 
+Preflight rejects any other listener rule unless it carries the
+`qm:operator-managed` tag. Tag a rule only when you run the service behind it
+and keep it correct yourself; qm does not check what a tagged rule matches or
+where it sends traffic. Shared ALBs never skip rules. The deploy role needs
+`elasticloadbalancing:DescribeTags`.
+
 ### Sandbox egress proxy
 
 Add `"egress-proxy"` to `services` to deploy the sandbox egress proxy
@@ -231,7 +244,7 @@ services' private network, so it relays audit records through `apiUrl` (or
 `egress_proxy_hostname` output. On Fly it serves TLS on 443 at
 `<appPrefix>-egress-proxy.fly.dev`. Docker publishes the plain listener on a host
 port and leaves TLS to the operator. Then set `env.core.EGRESS_PROXY_URL` to
-`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS` (DigitalOcean Managed Agents is never proxied, see [do-managed-agents.md](do-managed-agents.md)). Update vendored Terraform from the current scaffold
+`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS`. Update vendored Terraform from the current scaffold
 before enabling it on AWS.
 
 ### Shared AWS foundations
@@ -247,7 +260,7 @@ An exact `--candidate` deployment consumes its digest-pinned images without chan
 When `securityScreen.mode` is not `off`, the classifier screens external content — inbound data, attachments and documents, shared skills, steering context, and external tool output — under every security posture. Posture only caps enforcement: Dangerous scopes observe, and Auto and Strict follow the deployment mode. Scope posture changes cannot turn screening off; they keep their own tool approvals and private-network policy.
 
 - `observe` classifies in the background and never delays a turn, quarantines, prompts, or adds untrusted-content markers. Each observation is bounded by `SECURITY_SCREEN_TIMEOUT_MS`, the same deadline enforce uses; there is no separate concurrency cap. Observed model screens are not charged to the user's budget.
-- `enforce` waits for the verdict. Flagged content is quarantined pending release approval. Outages, timeouts, and unscreenable content fail open with an untrusted-content marker and an audit record.
+- `enforce` waits for the verdict. Flagged content is quarantined pending release approval. Content too long for the screen to read does not pass through: a message waits for a once-only approval and then runs with the untrusted-content marker, and a file or document is withheld with a notice that says why. A triggered run with no webhook receiver for its approvals, such as a cron, monitor or loop stage, fails closed instead, and the run's note gives the approval's reason, for flagged input as well as input too long to read. Loop triage is the exception for a long backlog: each fire screens and sorts as many items as fit, and later fires take the rest. Outages, timeouts, and other unscreenable content fail open with an untrusted-content marker and an audit record.
 
 Every classification writes one `security_screen.classify` audit record with status `allow`, `block`, `would_block`, or `error`. Its detail carries the hook, source labels, surface, origin, session, run and thread identifiers, request ID, attempt count, and any score, threshold, or outcome — enough to find the transcript behind a would-block. It never includes the screened text.
 

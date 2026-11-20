@@ -1,7 +1,8 @@
+import type { Tenant } from "../tenants/context.ts";
 const DECISION_HOOK_POINTS = {
   user_input: { actions: ["allow", "block"], decide: "most_restrictive" },
   tool_response: { actions: ["allow", "block"], decide: "most_restrictive" },
-  turn_start: { actions: ["keep", "use_runtime"], decide: "most_confident" },
+  turn_start: { actions: ["keep", "use_runtime", "use_persona"], decide: "most_confident" },
   turn_end: { actions: ["keep", "retry", "prod"], decide: "most_confident" },
   goal_check: { actions: ["continue", "complete", "step_back", "pause"], decide: "most_confident" },
 } as const satisfies Record<string, { actions: readonly string[]; decide: "most_restrictive" | "most_confident" }>;
@@ -38,6 +39,7 @@ interface DecisionOption {
   action: DecisionAction;
   message?: string;
   runtime?: RuntimeParams;
+  persona?: string;
 }
 
 export interface DecisionRule {
@@ -56,6 +58,7 @@ export interface DecisionResult {
   action: DecisionAction;
   message?: string;
   runtime?: RuntimeParams;
+  persona?: string;
   probabilities: Record<string, number>;
   mode: DecisionRule["mode"];
   error?: string;
@@ -68,6 +71,7 @@ export interface DecisionQuestion {
 
 export interface DecisionBackend {
   choose(input: {
+    tenant: Tenant;
     questions: Record<string, DecisionQuestion>;
     state: string;
     model: DecisionModelRef;
@@ -142,6 +146,10 @@ export function parseDecisionRule(
     const rt = o.runtime as Record<string, unknown> | undefined;
     if ((o.action === "use_runtime") !== (rt !== undefined))
       return { error: `${r.id}.${key}: runtime is required with use_runtime and only allowed there` };
+    if ((o.action === "use_persona") !== (o.persona !== undefined))
+      return { error: `${r.id}.${key}: persona is required with use_persona and only allowed there` };
+    if (o.persona !== undefined && (typeof o.persona !== "string" || !o.persona.trim()))
+      return { error: `${r.id}.${key}: persona must be a persona id` };
     if ((o.action === "retry" || o.action === "prod") && !(typeof o.message === "string" && o.message.trim()))
       return { error: `${r.id}.${key}: ${String(o.action)} needs a message telling the agent what to do` };
     if (
@@ -169,6 +177,7 @@ export function parseDecisionRule(
             },
           }
         : {}),
+      ...(o.persona ? { persona: o.persona as string } : {}),
     };
   }
   const count = Object.keys(options).length;
@@ -197,14 +206,15 @@ export function parseDecisionRule(
 export function checkRuleSet(all: readonly DecisionRule[]): string | undefined {
   const rules = all.filter((r) => r.mode !== "off");
   if (rules.length > MAX_RULES) return `at most ${MAX_RULES} active decision rules`;
-  const confidentHook = rules.find(
-    (r, i) =>
-      r.mode === "enforce" &&
-      DECISION_HOOK_POINTS[r.hook].decide === "most_confident" &&
-      rules.some((o, j) => j < i && o.hook === r.hook && o.mode === "enforce"),
-  );
-  if (confidentHook)
-    return `${confidentHook.id}: ${confidentHook.hook} allows one enforcing rule; set the others to observe`;
+  const acts = (r: DecisionRule) =>
+    r.mode === "enforce" && DECISION_HOOK_POINTS[r.hook].decide === "most_confident"
+      ? Object.values(r.options).flatMap((o) => (rank(r.hook, o.action) > 0 ? [o.action] : []))
+      : [];
+  for (const [i, r] of rules.entries()) {
+    const clash = acts(r).find((a) => rules.some((o, j) => j < i && o.hook === r.hook && acts(o).includes(a)));
+    if (clash)
+      return `${r.id}: ${r.hook} allows one enforcing rule per action, and another already uses ${clash}; set one to observe`;
+  }
   const text = rules.reduce(
     (n, r) => n + r.question.length + Object.values(r.options).reduce((m, o) => m + o.description.length, 0),
     0,
@@ -256,6 +266,7 @@ function settle(rule: DecisionRule, answer: Record<string, number> | Error | und
     action: opt.action,
     ...(opt.message ? { message: opt.message } : {}),
     ...(opt.runtime ? { runtime: opt.runtime } : {}),
+    ...(opt.persona ? { persona: opt.persona } : {}),
     probabilities,
     mode: rule.mode,
     ...(error ? { error } : {}),
@@ -263,6 +274,7 @@ function settle(rule: DecisionRule, answer: Record<string, number> | Error | und
 }
 
 async function runGroup(
+  tenant: Tenant,
   rules: readonly DecisionRule[],
   state: string,
   backend: DecisionBackend,
@@ -271,6 +283,7 @@ async function runGroup(
   let answers: Record<string, Record<string, number> | Error>;
   try {
     answers = await backend.choose({
+      tenant,
       questions: Object.fromEntries(
         rules.map((r) => [
           r.id,
@@ -307,6 +320,7 @@ export const asError = (error: unknown): Error =>
 export const classifierKey = (rule: DecisionRule): string => JSON.stringify([rule.model.provider, rule.model.model]);
 
 export async function runHook(
+  tenant: Tenant,
   rules: readonly DecisionRule[],
   hook: DecisionHook,
   state: string,
@@ -318,7 +332,9 @@ export async function runHook(
     const key = classifierKey(rule);
     groups.set(key, [...(groups.get(key) ?? []), rule]);
   }
-  const results = (await Promise.all([...groups.values()].map((g) => runGroup(g, state, backend, signal)))).flat();
+  const results = (
+    await Promise.all([...groups.values()].map((g) => runGroup(tenant, g, state, backend, signal)))
+  ).flat();
   const confident = DECISION_HOOK_POINTS[hook].decide === "most_confident";
   const weight = (r: DecisionResult) => {
     if (!confident) return rank(hook, r.action);

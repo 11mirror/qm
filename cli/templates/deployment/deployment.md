@@ -15,8 +15,8 @@ Before cloud mutation, read `qm.config.jsonc` when it exists. Its `target` is
 the selected provider; confirm it with the operator and do not offer to change
 it in place. If the repository has not been initialized, collect:
 
-- hosting target: a cloud provider — Fly.io, AWS, Render, or Porter. Recommend Fly.io
-  when the operator has no preference. Porter deploys onto a Kubernetes
+- hosting target: a cloud provider — AWS, Render, Fly.io, or Porter. Ask which
+  one the operator uses; do not recommend one by default. Porter deploys onto a Kubernetes
   cluster in the operator's own cloud account and has no `qm` CLI target:
   choosing it switches this workflow to `references/porter.md`, which drives
   the Porter CLI and dashboard directly. The docker target runs everything on
@@ -156,29 +156,6 @@ endpoints and the email gate in `env.core`. For Google Workspace:
   "OIDC_ALLOWED_EMAILS": "<verified-work-email>"
 }
 ```
-
-### Playground mode
-
-A playground is a public try-it deployment: unauthenticated visitors get
-anonymous browser-pinned identities instead of a sign-in page, while the one
-administrator still signs in through whichever route above the deployment
-configured. Enable it in `qm.config.jsonc`:
-
-```json
-"env": { "core": { "PORTAL_PLAYGROUND": "1" } }
-```
-
-A playground must be its **own deployment**, never a flag on a working org's
-instance: every visitor is an ordinary internal principal of the deployment's
-org, so anything granted or published at org scope — including org-granted
-credentials — is theirs. Grant nothing sensitive at org scope, connect no real
-connector credentials, and load no company data. A cleared cookie is a fresh
-identity, so set `env.core.ORG_BUDGET_USD_PER_WINDOW` — the one hard spend
-ceiling — in the same pass, and from the Admin page after first boot restrict
-the model picker to the subset you want to offer (one model or several).
-Nothing garbage-collects an abandoned visitor's scope yet.
-`plugins/portal/README.md` § "Playground mode" covers the rest: per-address
-mint limits, the boot refusals, and what anonymous visitors are denied.
 
 ### The base model
 

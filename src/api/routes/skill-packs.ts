@@ -49,7 +49,7 @@ async function listPacks(ctx: ApiCtx): Promise<void> {
     }
   }
   const decorated = packs.map((p) => ({ ...p, importedCount: importedByPack.get(p.id)?.size ?? 0 }));
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "skill_packs.read",
     resource: "skill_packs",
@@ -84,7 +84,7 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
       : {}),
   };
   const pack = await ctx.app.registerSkillPack(input);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "skill_pack.register",
     resource: pack.id,
@@ -97,7 +97,7 @@ async function packCatalog(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return;
   const plan = await ctx.app.skillPackCatalog(ctx.params.id!);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "skill_pack.catalog",
     resource: ctx.params.id!,
@@ -120,7 +120,7 @@ async function importPack(ctx: ApiCtx): Promise<void> {
       message: "scopeIds must be an array of 'kind:ref' scope ids",
     });
   const result = await ctx.app.importSkillPack(ctx.params.id!, subset, scopeIds);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "skill_pack.import",
     resource: ctx.params.id!,
@@ -133,7 +133,7 @@ async function syncPack(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return;
   const result = await ctx.app.syncSkillPack(ctx.params.id!);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "skill_pack.sync",
     resource: ctx.params.id!,
@@ -159,7 +159,7 @@ async function patchPack(ctx: ApiCtx): Promise<void> {
   }
   if (b.config !== undefined) patch.config = asConfig(b.config);
   const pack = await ctx.app.updateSkillPack(ctx.params.id!, patch);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "skill_pack.update",
     resource: pack.id,
@@ -172,7 +172,7 @@ async function removePack(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return;
   const result = await ctx.app.removeSkillPack(ctx.params.id!);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "skill_pack.remove",
     resource: ctx.params.id!,
@@ -182,11 +182,11 @@ async function removePack(ctx: ApiCtx): Promise<void> {
 }
 
 export const skillPackRoutes: ReadonlyArray<Route<ApiCtx>> = withAdmin([
-  { method: "POST", path: "/v1/admin/skill-packs", auth: "either", handle: registerPack },
-  { method: "GET", path: "/v1/admin/skill-packs", auth: "either", handle: listPacks },
-  { method: "GET", path: "/v1/admin/skill-packs/:id/catalog", auth: "either", handle: packCatalog },
-  { method: "POST", path: "/v1/admin/skill-packs/:id/import", auth: "either", handle: importPack },
-  { method: "POST", path: "/v1/admin/skill-packs/:id/sync", auth: "either", handle: syncPack },
-  { method: "PATCH", path: "/v1/admin/skill-packs/:id", auth: "either", handle: patchPack },
-  { method: "DELETE", path: "/v1/admin/skill-packs/:id", auth: "either", handle: removePack },
+  { method: "POST", path: "/v1/admin/skill-packs", browser: "self", auth: "either", handle: registerPack },
+  { method: "GET", path: "/v1/admin/skill-packs", browser: "self", auth: "either", handle: listPacks },
+  { method: "GET", path: "/v1/admin/skill-packs/:id/catalog", browser: "self", auth: "either", handle: packCatalog },
+  { method: "POST", path: "/v1/admin/skill-packs/:id/import", browser: "self", auth: "either", handle: importPack },
+  { method: "POST", path: "/v1/admin/skill-packs/:id/sync", browser: "self", auth: "either", handle: syncPack },
+  { method: "PATCH", path: "/v1/admin/skill-packs/:id", browser: "self", auth: "either", handle: patchPack },
+  { method: "DELETE", path: "/v1/admin/skill-packs/:id", browser: "self", auth: "either", handle: removePack },
 ]);

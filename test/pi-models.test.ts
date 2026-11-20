@@ -1,4 +1,4 @@
-import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+import { MODEL_PROVIDERS, setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -10,7 +10,6 @@ import {
   onlyProvider,
   resolveModel,
   getRequiredModel,
-  MODEL_PROVIDERS,
   SELECTABLE_BASE_MODELS,
   contextTokenBudgetForModel,
   codexProviderModelId,
@@ -95,6 +94,7 @@ test("the curated catalog contains only current model families", () => {
     SELECTABLE_BASE_MODELS.map((model) => model.id),
     [
       "claude-opus-5-5",
+      "claude-fable-5-2",
       "claude-fable-5-1",
       "claude-fable-5",
       "claude-opus-5",
@@ -106,6 +106,8 @@ test("the curated catalog contains only current model families", () => {
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
+      "gpt-6.2-sol",
+      "gpt-6.2-astra",
       "gpt-6-astra",
       "gpt-6-astra-ultrafast",
       "gpt-6.1-sol",
@@ -117,6 +119,8 @@ test("the curated catalog contains only current model families", () => {
     ],
   );
   assert.equal(getRequiredModel("gpt-5.6-sol").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6.2-sol").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6.2-astra").contextWindow, 1_050_000);
   assert.equal(getRequiredModel("gpt-6-astra").contextWindow, 1_050_000);
   assert.equal(getRequiredModel("gpt-6-sol").contextWindow, 1_050_000);
   assert.equal(getRequiredModel("gpt-6-luna").contextWindow, 1_050_000);
@@ -137,6 +141,19 @@ test("the curated catalog contains only current model families", () => {
   assert.equal(sol61.thinkingLevelMap?.max, "max");
   assert.equal(modelSupportsFastMode("gpt-6.1-sol"), true);
   assert.equal(contextTokenBudgetForModel("gpt-6.1-sol"), 150_000);
+  const sol62 = getRequiredModel("gpt-6.2-sol");
+  assert.deepEqual(sol62.cost, sol61.cost);
+  assert.equal(sol62.thinkingLevelMap?.off, null);
+  assert.equal(sol62.thinkingLevelMap?.minimal, null);
+  const astra62 = getRequiredModel("gpt-6.2-astra");
+  assert.deepEqual(astra62.cost, {
+    input: 8,
+    output: 40,
+    cacheRead: 0.4,
+    cacheWrite: 10,
+    tiers: [{ inputTokensAbove: 272_000, input: 16, output: 60, cacheRead: 0.8, cacheWrite: 20 }],
+  });
+  assert.equal(astra62.thinkingLevelMap?.off, null);
   assert.deepEqual(getRequiredModel("gpt-6-sol").cost, {
     input: 2,
     output: 10,
@@ -226,6 +243,8 @@ test("context token budget is half of each model's real input room", () => {
     tiers: undefined,
   });
   assert.equal(contextTokenBudgetForModel("claude-fable-5-1"), 150_000, "a 1M window is capped, not halved");
+  assert.equal(contextTokenBudgetForModel("claude-fable-5-1", 40_000), 40_000, "an org ceiling lowers the cap");
+  assert.equal(contextTokenBudgetForModel("claude-fable-5-1", 1_000_000), 436_000, "and never exceeds half the room");
   const opus55 = getRequiredModel("claude-opus-5-5");
   assert.equal(opus55.contextWindow, 1_000_000);
   assert.equal(opus55.maxTokens, 128_000);
@@ -274,7 +293,15 @@ test("personal models retain canonical endpoints when org endpoints are overridd
 });
 
 test("registered OpenAI clones retain exact model identity on the Codex subscription transport", () => {
-  for (const id of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]) {
+  for (const id of [
+    "gpt-6.2-sol",
+    "gpt-6.2-astra",
+    "gpt-6-astra",
+    "gpt-6.1-sol",
+    "gpt-6.1-terra",
+    "gpt-6-sol",
+    "gpt-6-luna",
+  ]) {
     const api = getRequiredModel(id);
     const subscription = getRequiredModel(codexSubscriptionModelId(id));
     assert.equal(subscription.id, `codex/${id}`);
@@ -303,4 +330,11 @@ test("gpt-6.1-terra pricing, context and fast mode match OpenAI's model page", (
     },
     { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
   );
+});
+
+test("Fable 5.2 always thinks adaptively and offers fast mode", () => {
+  const fable52 = getRequiredModel("claude-fable-5-2");
+  assert.equal(fable52.thinkingLevelMap?.off, null);
+  assert.equal((fable52.compat as { forceAdaptiveThinking?: boolean }).forceAdaptiveThinking, true);
+  assert.equal(modelSupportsFastMode("claude-fable-5-2"), true);
 });

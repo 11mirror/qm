@@ -154,6 +154,41 @@ test("a SOUL conflict loads the latest revision and keeps the draft", async () =
   admin.close();
 });
 
+test("the app handle saves only a well-formed handle and shows the server's refusal", async () => {
+  const saves: unknown[] = [];
+  const admin = await mountPage("/settings/customize", {
+    "/scopes/org:acme": { appHandle: "nitroduck" },
+    "PUT /scopes/org:acme/app-handle": ({ body }) => {
+      saves.push(plain(body));
+      return body.handle === "taken1"
+        ? { status: 409, body: { message: "another workspace already uses that handle" } }
+        : { ok: true };
+    },
+  });
+  await admin.settle();
+  assert.equal(admin.document.querySelector<HTMLInputElement>("#app-handle")!.value, "nitroduck");
+  type(admin, "#app-handle", "nitro-duck-");
+  click(admin, '[data-save="app-handle"]');
+  await admin.settle();
+  assert.equal(
+    admin.document.getElementById("st-app-handle")!.textContent,
+    "Use 2–61 lowercase letters, digits or hyphens, not starting or ending with a hyphen.",
+  );
+  assert.deepEqual(saves, []);
+  type(admin, "#app-handle", "taken1");
+  click(admin, '[data-save="app-handle"]');
+  await admin.settle();
+  assert.equal(
+    admin.document.getElementById("st-app-handle")!.textContent,
+    "another workspace already uses that handle",
+  );
+  type(admin, "#app-handle", " nitro-duck2 ");
+  click(admin, '[data-save="app-handle"]');
+  await admin.settle();
+  assert.deepEqual(saves, [{ handle: "taken1" }, { handle: "nitro-duck2" }]);
+  admin.close();
+});
+
 test("feature flags enable the scopes picked in a native multi-select", async () => {
   const saves: unknown[] = [];
   const admin = await mountPage("/settings/customize", {
@@ -224,13 +259,21 @@ test("credential usage fills in when it arrives, survives failure, and ignores r
     });
     await admin.settle();
     const list = () => admin.document.getElementById("sc-list")?.textContent ?? "";
-    assert.match(list(), /Loading usage…/);
+    assert.doesNotMatch(list(), /\buses?\b|Usage unavailable/);
     if (outcome === "view") await visit(admin, "/settings/models");
     usage.resolve(
-      outcome === "failed" ? { status: 500, body: {} } : { summaries: [{ slug: "example", usageCount: 7 }] },
+      outcome === "failed"
+        ? { status: 500, body: {} }
+        : { summaries: [{ slug: "example", usageCount: 7, usageSince: Date.UTC(2026, 10, 12, 12) }] },
     );
     await admin.settle();
-    if (outcome === "current") assert.match(list(), /7 successful uses/);
+    if (outcome === "current") {
+      assert.match(list(), /7 uses since Nov 12/);
+      const links = [...admin.document.querySelectorAll<HTMLAnchorElement>("#app-view a.viewlink")].map(
+        (a) => a.textContent,
+      );
+      assert.deepEqual(links, ["View usage ›", "View users ›"]);
+    }
     if (outcome === "failed") assert.match(list(), /Usage unavailable/);
     if (outcome === "view") assert.equal(list(), "");
     admin.close();
@@ -265,7 +308,8 @@ test("credentials save from the dialog and delete after review", async () => {
   await admin.settle();
   assert.equal(dialog.open, false);
   assert.match(admin.document.getElementById("sc-list")!.textContent!, /Service/);
-  click(admin, '#sc-list [aria-label="Delete Service"]');
+  click(admin, '#sc-list [aria-label="Edit Service"]');
+  click(admin, "#sc-delete");
   await admin.settle();
   assert.match(admin.document.getElementById("governance-review-title")!.textContent!, /Delete “Service”/);
   click(admin, "#governance-review-confirm");
@@ -317,10 +361,16 @@ test("the models view saves runtime rows chosen in the composer picker", async (
       fallbackRuntime: null,
       memoryEmbeddingModel: null,
       memoryEmbeddingOptions: [{ id: "gateway/embed", name: "embed", provider: "qm:gateway" }],
+      compactionKeepPercent: null,
+      compactionKeepPercentDefault: 40,
+      historyBudgetTokens: null,
+      historyBudgetTokensDefault: 150000,
     },
     "PUT /scopes/org:acme/runtime": save,
     "PUT /scopes/org:acme/cron-runtime": save,
     "PUT /scopes/org:acme/memory-embedding-model": save,
+    "PUT /scopes/org:acme/compaction-keep-percent": save,
+    "PUT /scopes/org:acme/history-budget-tokens": save,
   });
   await admin.settle();
   const doc = admin.document;
@@ -330,6 +380,16 @@ test("the models view saves runtime rows chosen in the composer picker", async (
   const pickRecall = (modelId: string) => {
     recall.value = modelId;
     recall.dispatchEvent(new admin.window.Event("change"));
+  };
+  const keep = row("compaction-keep-percent").querySelector("input")!;
+  const typeKeep = (value: string) => {
+    keep.value = value;
+    keep.dispatchEvent(new admin.window.Event("input"));
+  };
+  const budget = row("history-budget-tokens").querySelector("input")!;
+  const typeBudget = (value: string) => {
+    budget.value = value;
+    budget.dispatchEvent(new admin.window.Event("input"));
   };
   const saveAll = async () => {
     doc.getElementById("runtimes-save")!.click();
@@ -357,12 +417,18 @@ test("the models view saves runtime rows chosen in the composer picker", async (
     ["", "gateway/embed"],
   );
   pickRecall("gateway/embed");
+  assert.equal(keep.placeholder, "40");
+  typeKeep("25");
+  assert.equal(budget.placeholder, "150000");
+  typeBudget("60000");
 
   await saveAll();
   assert.deepEqual(plain(saves), [
     ["/scopes/org:acme/runtime", { modelId: "fast", effortLevel: "high", fastMode: true }],
     ["/scopes/org:acme/cron-runtime", { modelId: "model", effortLevel: "auto", fastMode: false }],
     ["/scopes/org:acme/memory-embedding-model", { modelId: "gateway/embed" }],
+    ["/scopes/org:acme/compaction-keep-percent", { percent: "25" }],
+    ["/scopes/org:acme/history-budget-tokens", { tokens: "60000" }],
   ]);
   assert.equal(doc.querySelector(".dirty"), null);
   assert.equal(admin.window.localStorage.length, 0);
@@ -370,10 +436,14 @@ test("the models view saves runtime rows chosen in the composer picker", async (
   open("cron-runtime");
   row("cron-runtime").querySelector<HTMLButtonElement>(".loadout-foot-btn")!.click();
   pickRecall("");
+  typeKeep("");
+  typeBudget("");
   await saveAll();
-  assert.deepEqual(plain(saves.slice(3)), [
+  assert.deepEqual(plain(saves.slice(5)), [
     ["/scopes/org:acme/cron-runtime", { inherit: true }],
     ["/scopes/org:acme/memory-embedding-model", { modelId: null }],
+    ["/scopes/org:acme/compaction-keep-percent", { percent: null }],
+    ["/scopes/org:acme/history-budget-tokens", { tokens: null }],
   ]);
   assert.equal(row("cron-runtime").querySelector(".menu-label")!.textContent, "Job's scope default");
   admin.close();

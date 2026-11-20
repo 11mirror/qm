@@ -25,9 +25,15 @@ test("malformed request bodies are 400", async () => {
   const s = start();
   try {
     assert.equal((await post(s.base, "/v1/turns", JSON.stringify({ text: "hi" }))).status, 400);
+    const noSurface = {
+      text: "hi",
+      actor: { externalId: "a@example.test" },
+      conversation: { kind: "dm", threadRef: "t" },
+    };
+    assert.equal((await post(s.base, "/v1/turns", JSON.stringify(noSurface))).status, 400);
     assert.equal((await post(s.base, "/v1/turns", "{not json")).status, 400);
     assert.equal((await post(s.base, "/v1/grants", JSON.stringify({ path: "x" }))).status, 400);
-    assert.equal((await post(s.base, "/v1/deployments", JSON.stringify({ entrypoint: "x" }))).status, 400);
+    assert.equal((await post(s.base, "/v1/apps", JSON.stringify({ entrypoint: "x" }))).status, 400);
     assert.equal((await post(s.base, "/v1/crons", JSON.stringify({ action: "x" }))).status, 400);
   } finally {
     await s.close();
@@ -37,43 +43,12 @@ test("malformed request bodies are 400", async () => {
 test("unknown resources are 404, not silent 200 or 500", async () => {
   const s = start();
   try {
-    assert.equal((await post(s.base, "/v1/deployments/nope/rollback", JSON.stringify({ version: 1 }))).status, 404);
-    assert.equal((await post(s.base, "/v1/deployments/nope/archive", "")).status, 404);
+    assert.equal((await post(s.base, "/v1/apps/nope/rollback", JSON.stringify({ version: 1 }))).status, 404);
+    assert.equal((await post(s.base, "/v1/apps/nope/archive", "")).status, 404);
     assert.equal((await post(s.base, "/v1/crons/nope/disable", "")).status, 404);
     assert.equal((await fetch(`${s.base}/v1/sessions/nope?viewer=someone`)).status, 404);
     assert.equal((await fetch(`${s.base}/v1/sessions/nope`)).status, 400);
     assert.equal((await fetch(`${s.base}/v1/unknown-route`)).status, 404);
-  } finally {
-    await s.close();
-  }
-});
-
-test("webhook options are validated consistently on turns and steer requests", async () => {
-  const request = {
-    text: "hello",
-    surface: "web",
-    actor: { externalId: "alice@example.test" },
-    conversation: { kind: "dm", threadRef: "web:alice@example.test:conversation" },
-    deliveryTarget: "web:alice@example.test:conversation",
-    deliveryWebhook: { binding: "00000000-0000-4000-8000-000000000001", url: "https://receiver.example/qm" },
-  };
-  const s = start();
-  try {
-    for (const body of [
-      { ...request, deliveryWebhook: { binding: "bad", url: "https://receiver.example/qm" } },
-      { ...request, deliveryWebhook: { binding: request.deliveryWebhook.binding } },
-      { ...request, deliveryWebhook: { ...request.deliveryWebhook, url: "file:///etc/passwd" } },
-      { ...request, deliveryWebhook: { ...request.deliveryWebhook, url: "http://receiver.example/qm" } },
-      { ...request, deliveryTarget: "different" },
-      { ...request, surfaceTools: true },
-    ]) {
-      assert.equal((await post(s.base, "/v1/turns", JSON.stringify(body))).status, 400);
-      assert.equal(
-        (await post(s.base, "/v1/runs/missing/signal", JSON.stringify({ kind: "steer", text: "hello", request: body })))
-          .status,
-        400,
-      );
-    }
   } finally {
     await s.close();
   }

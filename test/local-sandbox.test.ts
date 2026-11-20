@@ -2,7 +2,6 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync } from "node:fs";
-import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,21 +14,12 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
+import { freePort } from "../scripts/dev/lib/proc.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
 let daemon: ChildProcess;
 let daemonPort = 0;
-
-async function freePort(): Promise<number> {
-  return new Promise((res) => {
-    const s = createServer();
-    s.listen(0, "127.0.0.1", () => {
-      const p = (s.address() as AddressInfo).port;
-      s.close(() => res(p));
-    });
-  });
-}
 
 before(async () => {
   daemonPort = await freePort();
@@ -318,4 +308,15 @@ test("core attachment trusts the core's actual networks, not docker's connect er
       args[1] === "connect" ? { code: 1, stdout: "", stderr: "endpoint already exists" } : fake.dockerExec(args),
   });
   await assert.rejects(refusing.provision(scope), /network connect .* failed: endpoint already exists/);
+});
+
+test("a computer's memory size is the container's memory limit", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake);
+  const sized = await sb.provision(scopeId("personal", "U41"), { memoryGb: 3 });
+  const args = fake.containers.get(sized.id)!.args;
+  assert.equal(args[args.indexOf("--memory") + 1], "3g");
+  const unsized = await sb.provision(scopeId("personal", "U42"));
+  assert.equal(fake.containers.get(unsized.id)!.args.includes("--memory"), false);
+  assert.equal(sb.profile.sizesMemory, true);
 });

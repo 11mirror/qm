@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { runNowSettled } from "./support/settle.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-artifacts-")) }));
@@ -66,16 +68,16 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
     assert.equal(skills.skills[0].status, "draft");
     assert.equal(skills.skills[0].lastUsedAt, 777, "rows carry lastUsedAt for the recency sort");
 
-    const deployments = await json(
-      await fetch(`${s.base}/v1/admin/deployments?scope=personal:U1`, { headers: ALICE_ADMIN }),
+    const publishedApps = await json(
+      await fetch(`${s.base}/v1/admin/apps?scope=personal:U1`, { headers: ALICE_ADMIN }),
     );
     assert.deepEqual(
-      deployments,
-      { scopeId: "personal:U1", deployments: [] },
-      "a scope with no deployments answers an honest empty list",
+      publishedApps,
+      { scopeId: "personal:U1", apps: [] },
+      "a scope with no apps answers an honest empty list",
     );
 
-    for (const kind of ["crons", "deployments", "skills"]) {
+    for (const kind of ["crons", "apps", "skills"]) {
       assert.equal(
         (await fetch(`${s.base}/v1/admin/${kind}`, { headers: ALICE_ADMIN })).status,
         400,
@@ -91,60 +93,12 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
         `${kind}: admin-only`,
       );
       assert.ok(
-        (await s.built.auditLog.events()).some((e) => e.action === `${kind}.read` && e.scopeLabel === "personal:U1"),
+        (await s.built.auditLog.events(testTenant)).some(
+          (e) => e.action === `${kind}.read` && e.scopeLabel === "personal:U1",
+        ),
         `${kind}: the read is audited`,
       );
     }
-  } finally {
-    await s.close();
-  }
-});
-
-test("an admin cannot repoint someone else's grant-carrying cron; its owner can", async () => {
-  const s = start();
-  try {
-    const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "review spend",
-      unattendedGrants: ["admin.spend.read"],
-    });
-    const put = (destination: unknown) =>
-      fetch(`${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`, {
-        method: "PUT",
-        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
-        body: JSON.stringify({ destination }),
-      });
-    assert.equal((await put({ type: "slack", target: "C9", audienceScopeId: "channel:C9" })).status, 409);
-    assert.equal(
-      (await put({ type: "slack", target: "C9", audienceScopeId: "personal:U1" })).status,
-      409,
-      "a caller-supplied audience cannot launder a room destination",
-    );
-    assert.equal((await s.built.app.getCron(cron.id))?.destination, undefined);
-
-    const own = await s.built.app.createCron({
-      ownerScopeId: "personal:admin-alice",
-      owner: "admin-alice",
-      createdBy: "admin-alice",
-      schedule: { everyMs: 60_000 },
-      action: "review spend",
-      unattendedGrants: ["admin.spend.read"],
-    });
-    const moved = await fetch(
-      `${s.base}/v1/admin/crons/${encodeURIComponent(own.id)}/destination?scope=personal:admin-alice`,
-      {
-        method: "PUT",
-        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
-        body: JSON.stringify({ destination: { type: "slack", target: "C9", audienceScopeId: "channel:C9" } }),
-      },
-    );
-    assert.equal(moved.status, 200, "the owner, acting live, chooses where their cron's output goes");
-    const after = await s.built.app.getCron(own.id);
-    assert.equal(after?.destination?.target, "C9");
-    assert.deepEqual(after?.unattendedGrants, ["admin.spend.read"]);
   } finally {
     await s.close();
   }
@@ -165,11 +119,16 @@ test("an admin can edit and clear a cron destination inside the administered sco
       method: "PUT",
       headers: { ...ALICE_ADMIN, "content-type": "application/json" },
       body: JSON.stringify({
-        destination: { type: "principal", target: "U2", audienceScopeId: "personal:U2", onBehalfOf: "U1" },
+        destination: { type: "principal", target: "U2", onBehalfOf: "U1" },
       }),
     });
     assert.equal(set.status, 200);
-    assert.equal((await s.built.app.getCron(cron.id))?.destination?.target, "U2");
+    assert.deepEqual((await s.built.app.getCron(cron.id))?.destination, {
+      type: "principal",
+      target: "U2",
+      audienceScopeId: "personal:U2",
+      onBehalfOf: "U1",
+    });
 
     const invalid = await fetch(
       `${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`,
@@ -199,7 +158,7 @@ test("an admin can edit and clear a cron destination inside the administered sco
     assert.equal(clear.status, 200);
     assert.equal((await s.built.app.getCron(cron.id))?.destination, undefined);
     assert.ok(
-      (await s.built.auditLog.events()).some(
+      (await s.built.auditLog.events(testTenant)).some(
         (e) => e.action === "cron.destination.update" && e.scopeLabel === "personal:U1",
       ),
       "the admin edit is audited",
@@ -230,7 +189,9 @@ test("a single skill drills in to its body, capabilities, and approvals — scop
     assert.equal(got.body, "# Summarize\nDo the thing.", "the full SKILL.md body comes back for the drill-in");
     assert.deepEqual(got.requiredCapabilities, ["egress:example.com"]);
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "skill.read" && e.scopeLabel === "personal:U1"),
+      (await s.built.auditLog.events(testTenant)).some(
+        (e) => e.action === "skill.read" && e.scopeLabel === "personal:U1",
+      ),
       "the read is audited",
     );
 
@@ -287,14 +248,19 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
       manifest: { name: "summarize", description: "sum it up", requiredCapabilities: [], body: "..." },
       createdBy: "U1",
     });
-    s.built.errors.record({
+    s.built.errors.record(testTenant, {
       category: "turn",
       code: "boom",
       message: "redacted",
       scopeLabel: "personal:U1",
       sessionId: "sess-1",
     });
-    s.built.errors.record({ category: "turn", code: "bang", message: "redacted", scopeLabel: "channel:C9" });
+    s.built.errors.record(testTenant, {
+      category: "turn",
+      code: "bang",
+      message: "redacted",
+      scopeLabel: "channel:C9",
+    });
 
     const crons = await json(await fetch(`${s.base}/v1/admin/crons?scope=org:default-org`, { headers: ALICE_ADMIN }));
     assert.deepEqual(
@@ -405,7 +371,6 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
       action: "run the existing script",
-      unattendedGrants: ["publish"],
       destination: { type: "principal", target: "U1" },
     });
     const runtime = { modelId: "claude-sonnet-5" };
@@ -427,12 +392,128 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
     assert.deepEqual(updated, { ...cron, runtime });
     const listed = await json(await fetch(`${s.base}/v1/admin/crons?scope=personal:U1`, { headers: ALICE_ADMIN }));
     assert.deepEqual(listed.crons[0].runtime, runtime);
-    assert.deepEqual(listed.crons[0].unattendedGrants, cron.unattendedGrants);
     assert.equal((await put({ runtime: null })).status, 200);
     assert.deepEqual(await s.built.app.getCron(cron.id), { ...cron, runtime: null });
-    const audit = (await s.built.auditLog.events()).filter((event) => event.action === "cron.runtime.update");
+    const audit = (await s.built.auditLog.events(testTenant)).filter((event) => event.action === "cron.runtime.update");
     assert.equal(audit.length, 2);
     assert.ok(audit.every((event) => event.principalId === "admin-alice" && event.resource === cron.id));
+  } finally {
+    await s.close();
+  }
+});
+
+test("an admin edit's destination audience follows its target and cannot be supplied by the caller", async () => {
+  const s = start();
+  try {
+    const dm = { type: "slack", target: "D1:1.2", audienceScopeId: "personal:U1" };
+    const cron = await s.built.app.createCron({
+      ownerScopeId: "personal:U1",
+      owner: "U1",
+      createdBy: "U1",
+      schedule: { everyMs: 60_000 },
+      action: "ping",
+      destination: dm,
+    });
+    const put = (destination: unknown, id = cron.id) =>
+      fetch(`${s.base}/v1/admin/crons/${encodeURIComponent(id)}/destination?scope=personal:U1`, {
+        method: "PUT",
+        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+        body: JSON.stringify({ destination }),
+      });
+    const stored = async (id = cron.id) => (await s.built.app.getCron(id))?.destination;
+
+    assert.equal((await put({ type: "slack", target: "C9", audienceScopeId: "personal:U1" })).status, 400);
+    assert.deepEqual(await stored(), dm, "a caller-supplied audience is refused and changes nothing");
+
+    assert.equal((await put({ type: "slack", target: "D1:1.2" })).status, 200);
+    assert.deepEqual(await stored(), dm, "saving the same target keeps the audience the server stamped on it");
+
+    assert.equal((await put({ type: "slack", target: "D1:5.6" })).status, 200);
+    assert.deepEqual(
+      await stored(),
+      { ...dm, target: "D1:5.6" },
+      "another thread in the same conversation keeps the conversation's audience",
+    );
+
+    assert.equal((await put({ type: "slack", target: "C9:3.4" })).status, 200);
+    assert.deepEqual(await stored(), { type: "slack", target: "C9:3.4", audienceScopeId: "channel:C9" });
+
+    assert.equal((await put({ type: "principal", target: "oidc:H:alice" })).status, 200);
+    assert.equal((await put({ type: "principal", target: "oidc:H:bob" })).status, 200);
+    assert.deepEqual(
+      await stored(),
+      { type: "principal", target: "oidc:H:bob", audienceScopeId: "personal:oidc:H:bob" },
+      "a principal's audience is always that principal, even when its id contains a colon",
+    );
+
+    const groupCron = await s.built.app.createCron({
+      ownerScopeId: "personal:U1",
+      owner: "U1",
+      createdBy: "U1",
+      schedule: { everyMs: 60_000 },
+      action: "ping",
+      destination: { type: "group", target: "G1", audienceScopeId: "group:G1" },
+    });
+    assert.equal((await put({ type: "slack", target: "G1:3.4" }, groupCron.id)).status, 200);
+    assert.deepEqual(
+      await stored(groupCron.id),
+      { type: "slack", target: "G1:3.4", audienceScopeId: "group:G1" },
+      "a group DM cron saved from the editor keeps its group audience",
+    );
+  } finally {
+    await s.close();
+  }
+});
+
+test("an admin edit cannot aim a cron at a channel its owner can't see by labelling it the cron's home", async () => {
+  const s = start();
+  try {
+    await s.built.app.upsertDirectory([{ principalId: "U1", displayName: "Una", type: "internal" }]);
+    await s.built.directory.replaceChannels(
+      [
+        { channelId: "C-home", name: "home", isPrivate: true },
+        { channelId: "C-secret", name: "secret", isPrivate: true },
+      ],
+      [{ channelId: "C-home", principalId: "U1" }],
+    );
+    const homes = [
+      {
+        ownerScopeId: "channel:C-home",
+        destination: { type: "slack", target: "C-home", audienceScopeId: "channel:C-home" },
+      },
+      { ownerScopeId: "personal:U1", destination: { type: "principal", target: "U1", audienceScopeId: "personal:U1" } },
+    ];
+    const statuses: number[] = [];
+    for (const home of homes) {
+      const cron = await s.built.app.createCron({
+        ...home,
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 3_600_000 },
+        message: `numbers from ${home.ownerScopeId}`,
+      });
+      for (const destination of [
+        { type: "slack", target: "C-secret", audienceScopeId: home.ownerScopeId },
+        { type: "slack", target: "C-secret" },
+      ]) {
+        const put = await fetch(
+          `${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=${encodeURIComponent(home.ownerScopeId)}`,
+          {
+            method: "PUT",
+            headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+            body: JSON.stringify({ destination }),
+          },
+        );
+        statuses.push(put.status);
+        await runNowSettled(s.built.scheduler, cron.id);
+      }
+    }
+    assert.deepEqual(
+      (await s.built.deliveries.pending("slack")).filter((d) => d.destination.target === "C-secret").map((d) => d.text),
+      [],
+      "neither cron's output reaches a channel its owner is not in",
+    );
+    assert.deepEqual(statuses, [400, 200, 400, 200], "the labelled edit is refused and the plain retarget is accepted");
   } finally {
     await s.close();
   }

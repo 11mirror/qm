@@ -9,11 +9,7 @@ import {
   type SpreadsheetWorkerBinding,
   type SpreadsheetWorkerResult,
 } from "./deterministic-spreadsheet-worker.ts";
-import {
-  assertFinnyCoreAuditableSop,
-  canonicalFinnyExecutionDigest,
-  finnySopVersionId,
-} from "./plan.ts";
+import { assertFinnyCoreAuditableSop, canonicalFinnyExecutionDigest, finnySopVersionId } from "./plan.ts";
 import { assertFinnyApprovedEvaluatorRef, assertFinnyPolicy } from "./policy.ts";
 import type { RecordFinnyAuditAttemptInput } from "./store.ts";
 import type { FinnyAuditControlResult, FinnyJob } from "./types.ts";
@@ -69,7 +65,11 @@ function validateArtifact(job: FinnyJob, artifact: FinnyCoreAuditArtifact): void
   nonempty(artifact.fileId, "Finny artifact file ID");
   if (artifact.fileId !== job.provisionalRevision) throw new Error("Finny artifact file binding is invalid");
   if (artifact.mime !== XLSX_MIME) throw new Error("Finny artifact MIME is invalid");
-  if (!Number.isSafeInteger(artifact.sizeBytes) || artifact.sizeBytes < 1 || artifact.sizeBytes !== artifact.bytes.length) {
+  if (
+    !Number.isSafeInteger(artifact.sizeBytes) ||
+    artifact.sizeBytes < 1 ||
+    artifact.sizeBytes !== artifact.bytes.length
+  ) {
     throw new Error("Finny artifact size is invalid");
   }
   const actualDigest = digestSpreadsheetArtifact(artifact.bytes);

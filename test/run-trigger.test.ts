@@ -207,38 +207,27 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
 });
 
 describe("runTrigger: an autonomous cron does NOT go live (it may be conditionally silent by design)", () => {
-  it("threads grants only for crons homed in their owner's own DM, wherever the output goes", async () => {
+  it("only a caller that declares an owner fire produces one, and only for a person", async () => {
     const requests: TurnRequest[] = [];
     const d = deps(async (request) => {
       requests.push(request);
       return { status: "ok" };
     });
-    const base = {
-      owner: "U1",
-      ownerScopeId: scopeId("personal", "U1"),
-      input: "scan",
-      surface: "cron",
-      unattendedGrants: ["admin.sessions.read"],
-    };
-    await runTrigger(d, { ...base, fireKey: "cron:owner" });
-    await runTrigger(d, { ...base, ownerScopeId: scopeId("channel", "C1"), fireKey: "cron:channel" });
+    const base = { owner: "U1", ownerScopeId: scopeId("personal", "U1"), input: "scan", surface: "cron" };
+    await runTrigger(d, { ...base, fireKey: "cron:unmarked" });
+    await runTrigger(d, { ...base, ownerFire: true, fireKey: "cron:marked" });
     await runTrigger(d, {
       ...base,
       owner: "system:channel:C1",
       ownerScopeId: scopeId("channel", "C1"),
+      ownerFire: true,
       fireKey: "cron:conversation",
     });
-    await runTrigger(d, { ...base, destination: toChannel, fireKey: "cron:owner-to-room" });
-    await runTrigger(d, { ...base, ownerScopeId: scopeId("personal", "U2"), fireKey: "cron:foreign-dm" });
-    assert.deepEqual(requests[0]?.unattendedGrants, ["admin.sessions.read"]);
-    assert.equal(requests[1]?.unattendedGrants, undefined);
-    assert.equal(requests[2]?.unattendedGrants, undefined);
     assert.deepEqual(
-      requests[3]?.unattendedGrants,
-      ["admin.sessions.read"],
-      "the owner chose where the output goes; the grants stay with the owner's home",
+      requests.map((r) => r.origin?.kind === "automation" && r.origin.ownerFire === true),
+      [false, true, false],
+      "a cron the conversation owns runs as the scope, which is nobody's authority",
     );
-    assert.equal(requests[4]?.unattendedGrants, undefined, "a cron homed in someone else's DM carries no grants");
   });
 
   it("a failed fire's error notice carries friendly copy while the fire history keeps the raw reason", async () => {
@@ -277,63 +266,6 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
     assert.equal(req?.surfaceTools, undefined, "a cron never gets addressed/shed semantics — it may stay silent");
     assert.equal((await d.deliveries.pending("slack")).length, 1, "core delivers the cron reply via the enqueue path");
   });
-});
-
-it("leaves a bound scheduled run's outcome to its own run delivery and keeps the failure note", async () => {
-  const results: TurnResult[] = [
-    {
-      status: "pending_approval",
-      pendingApprovals: [{ requestId: "approve", command: "send", reason: "approval required" }],
-    },
-    { status: "ok", reply: "Update" },
-    { status: "failed", reason: "boom" },
-  ];
-  for (const result of results) {
-    const d = deps(async (request) => {
-      assert.equal(request.deliveryTarget, "web:U1:bound");
-      return { ...result, runId: "scheduled-run" };
-    });
-    const outcome = await runTrigger(d, {
-      owner: "U1",
-      ownerScopeId: scopeId("personal", "U1"),
-      input: "scheduled task",
-      fireKey: "cron:1:fire:1",
-      surface: "cron",
-      destination: {
-        type: "webhook",
-        target: "web:U1:bound",
-        webhook: { binding: "binding", url: "https://receiver.example/qm" },
-      },
-      errorNotice: () => "failed",
-    });
-    assert.deepEqual(await d.deliveries.pending("webhook"), []);
-    if (result.status === "failed") assert.match(outcome.note ?? "", /boom/);
-  }
-});
-
-it("keeps shadow webhook results out of terminal-run recovery", async () => {
-  let request: TurnRequest | undefined;
-  const d = deps(async (submitted) => {
-    request = submitted;
-    return { status: "ok", reply: "Update", runId: "scheduled-run" };
-  });
-  await runTrigger(d, {
-    owner: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-    input: "scheduled task",
-    fireKey: "cron:shadow",
-    surface: "cron",
-    shadow: true,
-    destination: {
-      type: "webhook",
-      target: "web:U1:bound",
-      webhook: { binding: "binding", url: "https://receiver.example/qm" },
-    },
-  });
-  assert.ok(request);
-  assert.equal(request.deliveryTarget, undefined);
-  assert.deepEqual(await d.deliveries.pending("webhook"), []);
-  assert.equal((await d.deliveries.listShadow()).length, 1);
 });
 
 describe("runTrigger: a turn abandoned while still queued leaves the fire retryable", () => {

@@ -1,6 +1,9 @@
+import { PUBLISHED_SESSION_UPGRADE } from "./published-upgrade.ts";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { TENANCY_BASE } from "../tenants/migrations.ts";
+import { authoredUserTurn } from "./items.ts";
+import { TENANCY, tenantRowSecurity, tenantTables } from "../tenants/migrations.ts";
 import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
+import { claimFunction } from "../tenants/claim.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -422,8 +425,236 @@ const PARTICIPANT_MEMBERSHIP: PgMigrationDefinition = {
   ],
 };
 
+const SPEND_TRIGGERS = [
+  `CREATE OR REPLACE FUNCTION invalidate_request_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_request_spend$
+   BEGIN
+     INSERT INTO session_spend_dirty(tenant_id, day)
+     SELECT DISTINCT tenant, floor(at::numeric / 86400000)::bigint
+       FROM (VALUES
+         (CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.tenant_id END,
+          CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.created_at END),
+         (CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.tenant_id END,
+          CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.created_at END)
+       ) changed(tenant, at) WHERE at IS NOT NULL
+     ON CONFLICT DO NOTHING;
+     RETURN NULL;
+   END $invalidate_request_spend$`,
+  `CREATE OR REPLACE FUNCTION invalidate_session_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_session_spend$
+   BEGIN
+     IF TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.scope_id, OLD.origin, OLD.thread_ref, OLD.parent_session_id)
+          IS NOT DISTINCT FROM ROW(NEW.id, NEW.scope_id, NEW.origin, NEW.thread_ref, NEW.parent_session_id) THEN
+       RETURN NULL;
+     END IF;
+     INSERT INTO session_spend_dirty(tenant_id, session_id)
+     SELECT DISTINCT tenant, id FROM (VALUES (OLD.tenant_id, OLD.id), (NEW.tenant_id, NEW.id)) changed(tenant, id)
+      WHERE id IS NOT NULL;
+     RETURN NULL;
+   END $invalidate_session_spend$`,
+];
+
+const SESSION_TABLES = tenantTables(
+  "sessions/store/0056-tenants",
+  [
+    {
+      table: "sessions",
+      primaryKey: "id",
+      unique: [{ name: "sessions_thread_ref_key", columns: "thread_ref", constraint: true }],
+    },
+    { table: "participants", primaryKey: "session_id, principal_id" },
+    { table: "session_goals", primaryKey: "session_id" },
+    { table: "session_leases", primaryKey: "session_id" },
+    { table: "session_llm_requests", primaryKey: "id" },
+    { table: "session_pins", primaryKey: "id" },
+    { table: "session_spend_days", primaryKey: "day" },
+    {
+      table: "session_spend_dirty",
+      unique: [{ name: "session_spend_dirty_day_writer_key", columns: "day, writer", constraint: true }],
+    },
+    { table: "llm_prompt_envelopes", primaryKey: "hash" },
+  ],
+  {
+    tenanted: ["items", "blobs"],
+    references: [
+      {
+        table: "items",
+        name: "items_session_id_fkey",
+        columns: "session_id",
+        references: "sessions(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+      {
+        table: "session_goals",
+        name: "session_goals_session_id_fkey",
+        columns: "session_id",
+        references: "sessions(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+    ],
+    after: [
+      ...SPEND_TRIGGERS,
+      ...["items", "blobs"].flatMap(tenantRowSecurity),
+      `DO $unstamped$
+       BEGIN
+         DELETE FROM tenants WHERE id = (SELECT id FROM qm_tenant) AND settings = '{}'::jsonb;
+       EXCEPTION WHEN foreign_key_violation THEN NULL;
+       END $unstamped$`,
+      `DROP FUNCTION qm_tenant_id()`,
+      `DROP TABLE qm_tenant`,
+    ],
+  },
+);
+
+const SESSION_CLAIMS: PgMigrationDefinition = {
+  id: "sessions/store/0057-claims",
+  statements: [
+    claimFunction(
+      "claim_dirty_spend",
+      "",
+      "SELECT DISTINCT tenant_id, 'spend'::text FROM session_spend_dirty ORDER BY tenant_id",
+    ),
+    claimFunction(
+      "claim_purged_envelopes",
+      "cutoff bigint, lim integer",
+      `DELETE FROM llm_prompt_envelopes
+        WHERE (tenant_id, hash) IN (SELECT tenant_id, hash FROM llm_prompt_envelopes WHERE created_at < $1
+                                     ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)
+          AND created_at < $1
+        RETURNING tenant_id, hash`,
+    ),
+  ],
+};
+
+const SESSION_PERSONA: PgMigrationDefinition = {
+  id: "sessions/store/0056-persona",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS persona_id TEXT`],
+};
+
+const DROP_STOPPED_PLACEHOLDERS: PgMigrationDefinition = {
+  id: "sessions/store/0057-drop-stopped-placeholders",
+  statements: [
+    `CREATE TEMP TABLE stopped_placeholders ON COMMIT DROP AS
+      SELECT m.tenant_id, m.session_id, m.seq
+        FROM items m
+       WHERE m.kind = 'AgentMessage' AND m.variant IS DISTINCT FROM 'files_delivered'
+         AND m.search @@ 'stopped'::tsquery AND m.text = '(stopped)'
+         AND (SELECT p.kind FROM items p
+               WHERE p.tenant_id = m.tenant_id AND p.session_id = m.session_id AND p.seq < m.seq
+               ORDER BY p.seq DESC LIMIT 1) = 'Stop'`,
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE items DISABLE TRIGGER items_delete_through_session`,
+    `DELETE FROM items i USING stopped_placeholders s
+      WHERE i.tenant_id = s.tenant_id AND i.session_id = s.session_id AND i.seq = s.seq`,
+    `ALTER TABLE items ENABLE TRIGGER items_delete_through_session`,
+  ],
+};
+
+const USER_TURNS_BY_AUTHOR: PgMigrationDefinition = {
+  id: "sessions/store/0058-user-turns-by-author",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_user_turns_by_author ON items(tenant_id, author, created_at)
+      WHERE ${authoredUserTurn("items")}`,
+  ],
+};
+
+export const DROP_SESSION_LEASES: PgMigrationDefinition = {
+  id: "sessions/store/0059-drop-session-leases",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `DROP TABLE IF EXISTS session_leases`],
+};
+
+const DROP_ITEMS_TARGET_SEQ: PgMigrationDefinition = {
+  id: "sessions/store/0060-drop-items-target-seq",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_target_seq_kind, DROP COLUMN IF EXISTS target_seq`,
+  ],
+};
+
+const DROP_PARTICIPANT_WINDOWS: PgMigrationDefinition = {
+  id: "sessions/store/0061-drop-participant-windows",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `DELETE FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL`,
+    `ALTER TABLE participants DROP COLUMN IF EXISTS valid_from, DROP COLUMN IF EXISTS valid_to,
+       DROP COLUMN IF EXISTS valid_from_seq, DROP COLUMN IF EXISTS valid_to_seq`,
+  ],
+};
+
+const HUMAN_PROMPT_INDEX: PgMigrationDefinition = {
+  id: "sessions/store/0062-human-prompt-index",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_human_prompt ON items(tenant_id, session_id, seq DESC)
+     WHERE kind IN ('UserMessage', 'SteeringMessage') AND hidden IS DISTINCT FROM true
+       AND NOT (body @> '{"overheard":true}')
+       AND (body->>'speakerId' IS NOT NULL OR body @> '{"slackReplyReceipt":true}'
+         OR (kind = 'SteeringMessage' AND author IS NOT NULL))`,
+  ],
+};
+
+const BOT_WORK_COLUMN: PgMigrationDefinition = {
+  id: "sessions/store/0064-bot-work",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE OR REPLACE FUNCTION session_bot_work(spawn_meta TEXT) RETURNS BOOLEAN LANGUAGE plpgsql IMMUTABLE AS $bot_work$
+BEGIN
+  RETURN COALESCE(spawn_meta::jsonb -> 'botActor' = 'true'::jsonb, false);
+EXCEPTION WHEN invalid_text_representation OR untranslatable_character THEN
+  RETURN false;
+END $bot_work$`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS bot_work BOOLEAN NOT NULL GENERATED ALWAYS AS (session_bot_work(spawn_meta)) STORED`,
+  ],
+};
+
+const BACKFILL_NULL_CALL_IDS: PgMigrationDefinition = {
+  id: "sessions/store/0065-backfill-null-call-ids",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE TEMP TABLE null_call_items ON COMMIT DROP AS
+      SELECT tenant_id, session_id, turn_id, kind, seq,
+             row_number() OVER (PARTITION BY tenant_id, session_id, turn_id, kind ORDER BY seq) AS rn
+        FROM items WHERE call_id IS NULL AND kind IN ('ToolCall', 'ToolResult')`,
+    `CREATE TEMP TABLE backfilled_call_ids ON COMMIT DROP AS
+      SELECT tenant_id, session_id, turn_id, rn, 'call_backfill_' || gen_random_uuid() AS call_id
+        FROM null_call_items WHERE kind = 'ToolCall'`,
+    `INSERT INTO backfilled_call_ids
+      SELECT r.tenant_id, r.session_id, r.turn_id, r.rn, 'call_backfill_' || gen_random_uuid()
+        FROM null_call_items r
+       WHERE r.kind = 'ToolResult' AND NOT EXISTS (
+         SELECT 1 FROM null_call_items c
+          WHERE c.kind = 'ToolCall' AND c.tenant_id = r.tenant_id AND c.session_id = r.session_id
+            AND c.turn_id IS NOT DISTINCT FROM r.turn_id AND c.rn = r.rn)`,
+    `DO $backfill_null_call_ids$ BEGIN
+       IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'items_append_only' AND tgrelid = 'items'::regclass) THEN
+         ALTER TABLE items DISABLE TRIGGER items_append_only;
+       END IF;
+     END $backfill_null_call_ids$`,
+    `UPDATE items i SET call_id = b.call_id
+       FROM null_call_items n
+       JOIN backfilled_call_ids b
+         ON b.tenant_id = n.tenant_id AND b.session_id = n.session_id
+        AND b.turn_id IS NOT DISTINCT FROM n.turn_id AND b.rn = n.rn
+      WHERE i.tenant_id = n.tenant_id AND i.session_id = n.session_id AND i.seq = n.seq`,
+    `DO $backfill_null_call_ids$ BEGIN
+       IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'items_append_only' AND tgrelid = 'items'::regclass) THEN
+         ALTER TABLE items ENABLE TRIGGER items_append_only;
+       END IF;
+     END $backfill_null_call_ids$`,
+  ],
+};
+
+const TOOL_CALL_ID_CONSTRAINT: PgMigrationDefinition = {
+  id: "sessions/store/0066-tool-call-id-constraint",
+  autocommit: true,
+  statements: [
+    `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_tool_call_id_present`,
+    `ALTER TABLE items ADD CONSTRAINT items_tool_call_id_present
+       CHECK (call_id IS NOT NULL OR kind NOT IN ('ToolCall', 'ToolResult')) NOT VALID`,
+    `ALTER TABLE items VALIDATE CONSTRAINT items_tool_call_id_present`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
-  TENANCY_BASE,
+  ...TENANCY,
+  ...PUBLISHED_SESSION_UPGRADE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
@@ -433,6 +664,18 @@ export const SESSION_MIGRATIONS = [
   SESSION_FACTS_COPY,
   PARTICIPANT_MEMBERSHIP,
   DROP_TENANT_PREBUILD_INDEXES,
+  ...SESSION_TABLES,
+  SESSION_CLAIMS,
+  SESSION_PERSONA,
+  DROP_STOPPED_PLACEHOLDERS,
+  USER_TURNS_BY_AUTHOR,
+  DROP_SESSION_LEASES,
+  DROP_ITEMS_TARGET_SEQ,
+  DROP_PARTICIPANT_WINDOWS,
+  HUMAN_PROMPT_INDEX,
+  BOT_WORK_COLUMN,
+  BACKFILL_NULL_CALL_IDS,
+  TOOL_CALL_ID_CONSTRAINT,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { parseRenderSandboxImage, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
 import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import { parseScopeId } from "../types.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 export interface SandboxSettings {
   sandboxBackend: SandboxBackendName;
@@ -38,7 +40,6 @@ interface AwsSandboxEnv {
   snapshotIntervalMs?: number;
   defaultTimeoutSec?: number;
   cpus?: number;
-  memoryMb?: number;
   diskGb?: number;
 }
 
@@ -70,7 +71,6 @@ function awsSandboxEnv(env: NodeJS.ProcessEnv): AwsSandboxEnv {
     ...optNum(env, "AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", "snapshotIntervalMs"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
     ...optNum(env, "AWS_SANDBOX_CPUS", "cpus"),
-    ...optNum(env, "AWS_SANDBOX_MEMORY_MB", "memoryMb"),
     ...optNum(env, "AWS_SANDBOX_DISK_GB", "diskGb"),
   };
 }
@@ -79,7 +79,6 @@ interface LocalSandboxEnv {
   image?: string;
   dockerBin?: string;
   cpus?: number;
-  memoryMb?: number;
   coreContainer?: string;
   defaultTimeoutSec?: number;
 }
@@ -89,7 +88,6 @@ function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
     ...(env.LOCAL_SANDBOX_IMAGE ? { image: env.LOCAL_SANDBOX_IMAGE } : {}),
     ...(env.LOCAL_SANDBOX_DOCKER_BIN ? { dockerBin: env.LOCAL_SANDBOX_DOCKER_BIN } : {}),
     ...optNum(env, "LOCAL_SANDBOX_CPUS", "cpus"),
-    ...optNum(env, "LOCAL_SANDBOX_MEMORY_MB", "memoryMb"),
     ...(env.QM_CORE_CONTAINER ? { coreContainer: env.QM_CORE_CONTAINER } : {}),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
@@ -102,7 +100,6 @@ interface SpritesSandboxEnv {
   egressProxyUrl?: string;
   egressProxyAdditionalUrls?: string[];
   snapshotS3Bucket?: string;
-  memoryMb?: number;
   defaultTimeoutSec?: number;
 }
 
@@ -127,13 +124,10 @@ const retiredEgressProxyKeys = {
   SMOLMACHINES_EGRESS_PROXY_URL: "smolmachines",
   PORTER_SANDBOX_EGRESS_PROXY_URL: "porter",
   AGENT37_EGRESS_PROXY_URL: "agent37",
+  DO_AGENTS_EGRESS_PROXY_URL: "do-managed-agents",
 };
 
 function checkRetiredEgressProxyKeys(env: NodeJS.ProcessEnv): void {
-  if (env.DO_AGENTS_EGRESS_PROXY_URL)
-    throw new Error(
-      "No longer read: DO_AGENTS_EGRESS_PROXY_URL. DigitalOcean Managed Agents can't be forced through the QM egress proxy (docs/do-managed-agents.md), so its sessions keep open egress. Remove the setting.",
-    );
   const set = Object.entries(retiredEgressProxyKeys).filter(([key]) => env[key]);
   const uncovered = set.filter(([, backend]) => !egressProxyFor(env, backend).egressProxyUrl).map(([key]) => key);
   if (uncovered.length)
@@ -160,7 +154,6 @@ function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
         }
       : {}),
     ...(env.SPRITES_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.SPRITES_SNAPSHOT_S3_BUCKET } : {}),
-    ...optNum(env, "SPRITES_MEMORY_MB", "memoryMb"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
@@ -201,6 +194,7 @@ interface RenderSandboxEnv {
   apiKey?: string;
   workspaceId?: string;
   image?: string;
+  egressProxyUrl?: string;
   defaultTimeoutSec?: number;
 }
 
@@ -212,6 +206,7 @@ function renderSandboxEnv(env: NodeJS.ProcessEnv): RenderSandboxEnv {
     ...(env.RENDER_API_KEY?.trim() ? { apiKey: env.RENDER_API_KEY.trim() } : {}),
     ...(env.RENDER_WORKSPACE_ID?.trim() ? { workspaceId: env.RENDER_WORKSPACE_ID.trim() } : {}),
     ...(image ? { image } : {}),
+    ...egressProxyFor(env, "render"),
     ...(defaultTimeoutSec !== undefined ? { defaultTimeoutSec } : {}),
   };
 }
@@ -226,6 +221,7 @@ interface ManagedAgentsSandboxEnv {
   snapshotS3Bucket?: string;
   snapshotIntervalSec?: number;
   defaultTimeoutSec?: number;
+  egressProxyUrl?: string;
 }
 
 function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEnv {
@@ -235,6 +231,7 @@ function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEn
     ...(env.DO_AGENTS_TEMPLATE ? { template: env.DO_AGENTS_TEMPLATE } : {}),
     ...(env.DO_AGENTS_NAME_PREFIX ? { namePrefix: env.DO_AGENTS_NAME_PREFIX } : {}),
     ...(env.DO_AGENTS_SIZE_SLUG ? { sizeSlug: env.DO_AGENTS_SIZE_SLUG } : {}),
+    ...egressProxyFor(env, "do-managed-agents"),
     ...optNum(env, "DO_AGENTS_IDLE_TIMEOUT_SEC", "idleTimeoutSec"),
     ...(env.DO_AGENTS_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.DO_AGENTS_SNAPSHOT_S3_BUCKET } : {}),
     ...optNum(env, "DO_AGENTS_SNAPSHOT_INTERVAL_SEC", "snapshotIntervalSec"),
@@ -252,7 +249,6 @@ interface ModalSandboxEnv {
   image?: string;
   namePrefix?: string;
   cpus?: number;
-  memoryMb?: number;
   regions?: string[];
   sandboxTimeoutSec?: number;
   rotateAfterSec?: number;
@@ -273,7 +269,6 @@ function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
     ...(env.MODAL_IMAGE ? { image: env.MODAL_IMAGE } : {}),
     ...(env.MODAL_NAME_PREFIX ? { namePrefix: env.MODAL_NAME_PREFIX } : {}),
     ...optNum(env, "MODAL_CPUS", "cpus"),
-    ...optNum(env, "MODAL_MEMORY_MB", "memoryMb"),
     ...(env.MODAL_REGIONS?.trim()
       ? {
           regions: env.MODAL_REGIONS.split(",")
@@ -296,7 +291,6 @@ interface SmolmachinesSandboxEnv {
   namePrefix?: string;
   image?: string;
   cpus?: number;
-  memoryMb?: number;
   diskGb?: number;
   autoStopSec?: number;
   egressProxyUrl?: string;
@@ -312,7 +306,6 @@ function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv 
     ...(env.SMOLMACHINES_NAME_PREFIX ? { namePrefix: env.SMOLMACHINES_NAME_PREFIX } : {}),
     ...(env.SMOLMACHINES_IMAGE ? { image: env.SMOLMACHINES_IMAGE } : {}),
     ...optNum(env, "SMOLMACHINES_CPUS", "cpus"),
-    ...optNum(env, "SMOLMACHINES_MEMORY_MB", "memoryMb"),
     ...optNum(env, "SMOLMACHINES_DISK_GB", "diskGb"),
     ...optNum(env, "SMOLMACHINES_AUTOSTOP_SEC", "autoStopSec"),
     ...egressProxyFor(env, "smolmachines"),
@@ -338,7 +331,7 @@ export function porterApiBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
   const deployClusterId = numEnvStrict("PORTER_DEPLOY_CLUSTER_ID", env.PORTER_DEPLOY_CLUSTER_ID);
   const derived =
     deployProjectId !== undefined && deployClusterId !== undefined
-      ? `${(env.PORTER_DEPLOY_URL ?? "https://dashboard.porter.run").replace(/\/+$/, "")}/api/v2/alpha/projects/${deployProjectId}/clusters/${deployClusterId}`
+      ? `${trimTrailingSlashes(env.PORTER_DEPLOY_URL ?? "https://dashboard.porter.run")}/api/v2/alpha/projects/${deployProjectId}/clusters/${deployClusterId}`
       : undefined;
   return env.PORTER_SANDBOX_BASE_URL ?? derived;
 }
@@ -368,7 +361,6 @@ interface Agent37SandboxEnv {
   namePrefix?: string;
   template?: string;
   cpus?: number;
-  memoryGb?: number;
   diskGb?: number;
   egressProxyUrl?: string;
   defaultTimeoutSec?: number;
@@ -381,7 +373,6 @@ function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
     ...(env.AGENT37_NAME_PREFIX ? { namePrefix: env.AGENT37_NAME_PREFIX } : {}),
     ...(env.AGENT37_TEMPLATE ? { template: env.AGENT37_TEMPLATE } : {}),
     ...optNum(env, "AGENT37_CPUS", "cpus"),
-    ...optNum(env, "AGENT37_MEMORY_GB", "memoryGb"),
     ...optNum(env, "AGENT37_DISK_GB", "diskGb"),
     ...egressProxyFor(env, "agent37"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
@@ -426,13 +417,36 @@ function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
   };
 }
 
+export function superserveGenerationKey(
+  ss: SuperserveSandboxEnv,
+  buildSha: string | undefined,
+  keepWarmSec: number,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        buildSha ?? "",
+        ss.template,
+        ss.namePrefix ?? "",
+        ss.homeDir ?? "",
+        ss.idlePauseSec ?? null,
+        ss.retentionSec ?? null,
+        keepWarmSec,
+        [...(ss.egressAllow ?? [])].sort(),
+        [...(ss.egressDeny ?? [])].sort(),
+      ]),
+    )
+    .digest("hex")
+    .slice(0, 32);
+}
+
 export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendName[] {
   const credentialed: Record<SandboxBackendName, boolean> = {
     local: Boolean(config.localSandbox?.image),
     sprites: Boolean(config.spritesSandbox?.token),
     smolmachines: Boolean(config.smolmachinesSandbox?.token),
     agent37: Boolean(config.agent37Sandbox?.apiKey),
-    superserve: Boolean(config.superserveSandbox?.apiKey && config.superserveSandbox?.template),
+    superserve: Boolean(config.superserveSandbox?.template),
     e2b: Boolean(config.e2bSandbox?.apiKey),
     "do-managed-agents": Boolean(config.managedAgentsSandbox?.apiToken),
     modal: Boolean(config.modalSandbox?.tokenId && config.modalSandbox?.tokenSecret),
@@ -471,7 +485,9 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
 
 function warnUnprotectedSandboxes(env: NodeJS.ProcessEnv): void {
   if (
-    ["sprites", "e2b", "modal", "smolmachines", "porter"].includes(env.SANDBOX_BACKEND ?? "") &&
+    ["sprites", "e2b", "modal", "smolmachines", "porter", "render", "do-managed-agents"].includes(
+      env.SANDBOX_BACKEND ?? "",
+    ) &&
     !egressProxyFor(env, env.SANDBOX_BACKEND ?? "").egressProxyUrl
   ) {
     console.warn(

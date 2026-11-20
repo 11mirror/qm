@@ -4,7 +4,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { buffer } from "node:stream/consumers";
 import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import type { WebReleases } from "../../plugins/web-ui/server/index.ts";
+import type { WebReleases } from "./shell.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { LRUCache } from "lru-cache";
 import { errMessage, reportFailure } from "../util/errors.ts";
@@ -160,7 +160,7 @@ export function createWebReleaseReader(
     now?: () => number;
     log?: (line: string) => void;
   } = {},
-): WebReleases & { live(): Promise<string> } {
+): WebReleases {
   const log = opts.log ?? ((line: string) => console.error(line));
   let reported = "";
   let failure: unknown;

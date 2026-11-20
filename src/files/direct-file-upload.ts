@@ -24,6 +24,7 @@ import { FileUploadError, type FileUpload, type FileUploadStore } from "./file-u
 import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { swallow } from "../util/errors.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 
 export const FILE_UPLOAD_PART_SIZE = 64 * 1024 * 1024;
 const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
@@ -352,15 +353,19 @@ export function createDirectFileUploads(options: {
       await store.transition(id, ["aborting"], "aborted");
     },
     async sweep() {
-      for (const row of await store.expired(now())) {
-        try {
-          if (row.state === "completing") await service.complete(row.id);
-          else await service.abort(row.id);
-        } catch (error) {
-          if (error instanceof FileUploadError && error.status === 410) continue;
-          console.warn("[file uploads] cleanup failed", row.id, error instanceof Error ? error.name : "unknown");
-        }
-      }
+      await claimThenBind(
+        () => store.claimExpired(now()),
+        async (id) => {
+          try {
+            const row = await store.get(id);
+            if (row?.state === "completing") await service.complete(id);
+            else if (row) await service.abort(id);
+          } catch (error) {
+            if (error instanceof FileUploadError && error.status === 410) return;
+            console.warn("[file uploads] cleanup failed", id, error instanceof Error ? error.name : "unknown");
+          }
+        },
+      );
       let keyMarker: string | undefined;
       let uploadMarker: string | undefined;
       do {
@@ -388,8 +393,14 @@ export function createDirectFileUploads(options: {
             continue;
           const id = upload.Key.slice(`${options.prefix ?? ""}files/uploads/`.length);
           if (!/^[0-9a-f]{32}$/.test(id)) continue;
-          const row = await store.get(id);
-          if (row?.state === "completing" && row.uploadId === upload.UploadId) continue;
+          const held = await claimThenBind(
+            () => store.claimById(id),
+            async (claimed) => {
+              const row = await store.get(claimed);
+              return row?.state === "completing" && row.uploadId === upload.UploadId;
+            },
+          );
+          if (held.includes(true)) continue;
           await client.send(
             new AbortMultipartUploadCommand({ Bucket: options.bucket, Key: upload.Key, UploadId: upload.UploadId }),
           );

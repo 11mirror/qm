@@ -38,18 +38,18 @@ export function turnTools(kit: ToolKit) {
     name: "finish_silently",
     label: "finish_silently",
     description:
-      "End this turn without replying (surface turns that deserve none; scheduled fires with nothing to report). Not needed after posting; does nothing on a turn without surface tools unless it is a cron, webhook or watch fire.",
+      "End this turn without replying (surface turns that deserve none; scheduled fires with nothing to report). Not needed after posting; does nothing on a turn without surface tools unless it is a cron, webhook, watch or subagent wake.",
     parameters: Type.Object({
       reason: Type.Optional(Type.String({ description: "Short phrase for the audit log." })),
     }),
     async execute(callId, params) {
-      if (!ref.pollFire && !surfaceTools) {
+      if (!ref.replyOptional && !surfaceTools) {
         await recordCall(callId, { tool: "finish_silently", ...(params.reason ? { reason: params.reason } : {}) });
         return recordResult(
           callId,
-          { tool: "finish_silently", noop: "not_a_poll_fire" },
+          { tool: "finish_silently", noop: "reply_required" },
           text(
-            "[no-op] finish_silently only applies to surface turns or scheduled background fires; a person is waiting on this turn — just reply.",
+            "[no-op] finish_silently only applies to surface turns, scheduled background fires or subagent wakes; a person is waiting on this turn — just reply.",
           ),
           true,
         );
@@ -142,5 +142,39 @@ export function turnTools(kit: ToolKit) {
     },
   });
 
-  return { attach, finishSilently, context, runtime };
+  const withdrawApproval = defineTool({
+    name: "withdraw_approval",
+    label: "withdraw_approval",
+    description:
+      "Withdraw a pending approval card you raised in this conversation so it can no longer be approved, e.g. when the person changes their mind before approving. Pass the card id from the blocked call's result.",
+    parameters: Type.Object({
+      card: Type.String({ description: "Card id shown in the blocked call's result." }),
+    }),
+    async execute(callId, params) {
+      await recordCall(callId, { tool: "withdraw_approval", card: params.card });
+      const withdraw = ref.current?.withdrawApproval;
+      if (!withdraw)
+        return recordResult(
+          callId,
+          { tool: "withdraw_approval", ok: false },
+          text("[error] approval cards can't be withdrawn on this turn."),
+          true,
+        );
+      const { withdrawn } = await withdraw(params.card);
+      if (!withdrawn.length)
+        return recordResult(
+          callId,
+          { tool: "withdraw_approval", ok: false },
+          text(`[not found] no pending approval card ${params.card} in this conversation; it may already be resolved.`),
+          true,
+        );
+      return recordResult(
+        callId,
+        { tool: "withdraw_approval", ok: true, withdrawn },
+        text(`[withdrawn] ${withdrawn.join("; ")} — the card can no longer be approved.`),
+      );
+    },
+  });
+
+  return { attach, finishSilently, context, runtime, withdrawApproval };
 }

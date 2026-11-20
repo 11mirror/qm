@@ -1,5 +1,5 @@
 import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
-import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
+import { initializeBrowserErrors, reportHandledError, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
 import { captureSlackReturn } from "./slack-account";
 import { clearTranscriptCache } from "./transcript-cache";
@@ -52,7 +52,8 @@ import { icon } from "./icons";
 import { isPhone, markDesktopEmbed, onPhoneChange, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
-import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
+import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
+import { reloadIntoServedRelease } from "./stale-release";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
@@ -66,6 +67,7 @@ import {
   focusedPaneSession,
   loadPersistedSplit,
   mountRestoredCanvas,
+  notifyPanesChanged,
   restoredCanvasNeedsSessionList,
   splitState,
   singlePaneSessionId,
@@ -84,13 +86,13 @@ import {
   sessionsState,
   sessionSelectionBar,
   revealSessionSurface,
-  startNewChatInLastScope,
   startNewChat,
   openNewChat,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
 import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
+import { loadPersonas, openPersonaById, renderPersonasPage, routePersonasHistory } from "./personas";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
@@ -98,7 +100,7 @@ import { openSessionAtMessage, showLinkedSession } from "./open-message";
 import { closeBrowse, openBrowse, sidebarDestinations } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
-import { openDeployById, renderDeploys } from "./deploys";
+import { openAppById, renderApps } from "./apps-page";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderCalendar } from "./calendar";
 import {
@@ -114,6 +116,7 @@ import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
+import { welcomeThreadRef } from "./welcome-session";
 import { trapDialogFocus } from "./dialog-focus";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
 export { appState, can, type Me, type View } from "./shell-state";
@@ -148,7 +151,7 @@ let pendingCanvasRestore: Promise<void> | null = null;
 
 setSigninRequiredHandler((detail) => {
   authMode = detail.mode ?? authMode;
-  renderAuthGate(gateFor(authMode, detail.reason));
+  renderAuthGate(gateFor(authMode));
 });
 
 onExitCanvas(() => exitSplitIfActive());
@@ -172,10 +175,11 @@ export function syncUrlFromState(sessionOverride?: string | null, historyMode: "
 }
 
 function openViewAt(view: View, item: string | null, historyMode: "push" | "replace"): void {
-  if (view === "deploys" && item) openDeployById(item);
+  if (view === "apps" && item) openAppById(item);
   if (view === "crons" && item) openCronById(item);
   if (view === "webhooks" && item) openWebhookById(item);
   if (view === "skills" && item) openSkillById(item);
+  if (view === "personas" && item) openPersonaById(item);
   switchView(view, historyMode);
   if (view === "inbox") routeInboxHistory(item);
 }
@@ -251,7 +255,7 @@ const ICON = {
   contexts: Folder,
   files: Files,
   keychain: KeyRound,
-  deploys: Rocket,
+  apps: Rocket,
   webhooks: Webhook,
   crons: Clock,
   loops: Repeat,
@@ -340,7 +344,7 @@ function gateShell(body: unknown) {
     <div class="signin">
       <div class="signin-panel">
         <div class="signin-brand">
-          ${brandMark()}<span>${brandName()}</span>
+          ${brandMark()}<span class="brand-name">${brandName()}</span>
           ${authMode === "dev" ? html`<span class="dev-chip">DEV</span>` : nothing}
         </div>
         ${body}
@@ -395,21 +399,6 @@ function portalGate() {
     <h1>Your session ended</h1>
     <p class="signin-body">You've been signed out. Sign in again and you'll come back to this page.</p>
     <button class="btn primary" type="button" @click=${signInWithPortal}>Sign in</button>
-  `);
-}
-
-function deniedGate() {
-  return gateShell(html`
-    <h1>You don't have access</h1>
-    <p class="signin-body">
-      Your account is signed in and verified — it just isn't allowed on this instance. Ask an administrator to add you.
-    </p>
-    <button class="btn" type="button" @click=${signOut}>Sign out</button>
-    ${
-      authMode === "dev"
-        ? html`<div class="hint">This instance lists its principals in <b>WEB_UI_PRINCIPALS</b>.</div>`
-        : nothing
-    }
   `);
 }
 
@@ -476,10 +465,7 @@ function devGate(gate: { value?: string; error?: string; pending?: boolean }) {
 }
 
 export type AuthGate =
-  | { kind: "portal" }
-  | { kind: "denied" }
-  | { kind: "unreachable" }
-  | { kind: "dev"; value?: string; error?: string; pending?: boolean };
+  { kind: "portal" } | { kind: "unreachable" } | { kind: "dev"; value?: string; error?: string; pending?: boolean };
 
 export function renderAuthGate(gate: AuthGate): void {
   stopAnalytics();
@@ -490,8 +476,6 @@ export function renderAuthGate(gate: AuthGate): void {
     switch (gate.kind) {
       case "portal":
         return portalGate();
-      case "denied":
-        return deniedGate();
       case "unreachable":
         return unreachableGate();
       default:
@@ -501,8 +485,7 @@ export function renderAuthGate(gate: AuthGate): void {
   render(body, appEl as HTMLElement);
 }
 
-function gateFor(mode: AuthMode, reason: "unauthenticated" | "not_allowed" | undefined): AuthGate {
-  if (reason === "not_allowed") return { kind: "denied" };
+function gateFor(mode: AuthMode): AuthGate {
   return mode === "dev" ? { kind: "dev" } : { kind: "portal" };
 }
 
@@ -675,7 +658,7 @@ export function renderSidebarTop(): void {
       <div class="nav new-chat-nav">
         ${actionRow(ICON.newChat, newChatLabel, () => {
           hideTooltip();
-          startNewChatInLastScope();
+          startNewChat();
         })}
       </div>
       ${sessionSelectionBar() ?? nothing}
@@ -785,14 +768,17 @@ function showView(v: View): void {
     case "keychain":
       void renderConnectors();
       break;
-    case "deploys":
-      void renderDeploys();
+    case "apps":
+      void renderApps();
       break;
     case "memory":
       void renderMemory();
       break;
     case "skills":
       void renderSkills();
+      break;
+    case "personas":
+      void renderPersonasPage();
       break;
     case "settings":
       renderSettings();
@@ -853,14 +839,17 @@ function refreshActiveView(v: View): void {
       clearConnectorNotice();
       void renderConnectors();
       break;
-    case "deploys":
-      void renderDeploys();
+    case "apps":
+      void renderApps();
       break;
     case "memory":
       void renderMemory();
       break;
     case "skills":
       void renderSkills();
+      break;
+    case "personas":
+      void renderPersonasPage();
       break;
     case "settings":
       renderSettings();
@@ -1014,13 +1003,14 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
 window.addEventListener("popstate", () => {
   if (!appState.me) return;
   cancelNavigation();
-  const routed = ["crons", "webhooks", "inbox", "skills"];
+  const routed = ["crons", "webhooks", "inbox", "skills", "personas"];
   const { view: linkedView, session, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
   const view = isView(linkedView) ? linkedView : "chats";
   if (view === appState.currentView && routed.includes(view)) {
     if (view === "crons") routeCronsHistory(item);
     else if (view === "webhooks") routeWebhooksHistory(item);
     else if (view === "skills") routeSkillsHistory(item);
+    else if (view === "personas") routePersonasHistory(item);
     else routeInboxHistory(item);
     return;
   }
@@ -1028,8 +1018,10 @@ window.addEventListener("popstate", () => {
   else void restoreChatsEntry(session);
 });
 
+document.addEventListener("visibilitychange", reloadIntoServedRelease);
+
 window.addEventListener("focus", () => {
-  if (!appState.me) return;
+  if (!appState.me || reloadIntoServedRelease()) return;
   if (appState.currentView === "contexts") void renderContexts();
   else if (appState.currentView === "chats") {
     void refreshSessions({ silent: true, refreshContexts: true });
@@ -1068,8 +1060,6 @@ export async function bootSafely(): Promise<void> {
   }
 }
 
-// Session links nobody else handled (chat messages, markdown) switch the view instead of opening a new
-// tab or desktop window. Modified clicks fall through, so cmd/ctrl-click still opens a new tab.
 document.addEventListener("click", (e) => {
   if (!shellMounted || e.defaultPrevented || !isPlainLeftClick(e)) return;
   const anchor = e.composedPath().find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement);
@@ -1092,11 +1082,22 @@ export async function boot(): Promise<void> {
     session: wantedSession,
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
+  if (wanted === "app-share") {
+    await import("./app-share-embed")
+      .then(({ bootAppShare }) => bootAppShare(params))
+      .catch((e: unknown) => {
+        reportHandledError("web-ui: app-share", e);
+        renderAuthGate({ kind: "unreachable" });
+      });
+    return;
+  }
   const appEditEmbed = wanted === "app-edit" && params.get("embed") === "1";
   document.body.classList.toggle("app-edit-embed", appEditEmbed);
   markDesktopEmbed(appEditEmbed);
   const prefillRoute = wanted === null || wanted === "new";
   const prefill = prefillRoute && !wantedSession ? (params.get("q")?.slice(0, 20_000) ?? null) : null;
+  const onboard = wanted === "onboard" && !wantedSession;
+  const explicitChat = Boolean(wantedSession) || wanted === "app-edit" || prefill !== null || onboard;
   const chatsLink = wanted === null || wanted === "chats";
   const linkedId = wantedSession && chatsLink ? wantedSession : null;
   let transcriptUnavailable = false;
@@ -1123,7 +1124,7 @@ export async function boot(): Promise<void> {
   if (r.status === 401) {
     const body = (await r.json().catch(() => ({}))) as SigninRequired;
     authMode = body.mode ?? "portal";
-    renderAuthGate(gateFor(authMode, body.reason));
+    renderAuthGate(gateFor(authMode));
     return;
   }
   if (!r.ok) {
@@ -1134,6 +1135,10 @@ export async function boot(): Promise<void> {
   appState.me = (await r.json()) as Me;
   void initializeBrowserErrors(appState.me);
   void initializeAnalytics(appState.me, isView(wanted) && canView(wanted) ? wanted : "chats");
+  void loadPersonas().then(() => {
+    notifyPanesChanged();
+    for (const conversation of allConversations()) conversation.redraw();
+  });
   authMode = appState.me.mode ?? "portal";
   clearPortalAttempt();
   if (appState.me.individualModelAuth && !appState.me.modelAuthConnected) {
@@ -1161,7 +1166,7 @@ export async function boot(): Promise<void> {
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
   const restoreLast = viewIntent || !(await openNewChatFetch);
   if (restoreLast) loadPersistedSplit();
-  if (restoreLast && !wantedSession && wanted !== "app-edit" && prefill === null) {
+  if (restoreLast && !explicitChat) {
     const restore = adoptRemoteSplit(remoteSplitFetch).then(async () => {
       if (viewIntent && restoredCanvasNeedsSessionList()) await sessions;
     });
@@ -1172,7 +1177,7 @@ export async function boot(): Promise<void> {
     if (!viewIntent) await restore;
   }
 
-  const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;
+  const bareEntry = !viewIntent && !explicitChat && !connectedProvider;
   if (restoreLast && bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
@@ -1201,7 +1206,7 @@ export async function boot(): Promise<void> {
       const status = params.get("status");
       if (provider && status) noteConnectorResult(provider, status);
     }
-    if (wanted === "contexts" || wanted === "files" || wanted === "deploys") {
+    if (wanted === "contexts" || wanted === "files" || wanted === "apps") {
       const scope =
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
@@ -1217,6 +1222,13 @@ export async function boot(): Promise<void> {
     saveDraft(newChatDraftKey(appState.me.user), prefill);
     exitSplitIfActive();
     mainConversation().newChat();
+    return;
+  }
+
+  if (onboard) {
+    history.replaceState(null, "", deepLinkPath(UI_BASE, "chats", null));
+    exitSplitIfActive();
+    mainConversation().newChat(undefined, welcomeThreadRef(appState.me.user));
     return;
   }
 
@@ -1246,7 +1258,7 @@ export async function boot(): Promise<void> {
 window.addEventListener("qm:new-session", () => {
   if (!appState.me) return;
   hideTooltip();
-  startNewChatInLastScope();
+  startNewChat();
 });
 
 window.addEventListener("qm:prepare-update", (event) => {

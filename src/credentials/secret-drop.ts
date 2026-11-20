@@ -11,6 +11,7 @@ export interface SecretDropField {
 }
 
 export interface SecretDropRecord {
+  kind?: "login";
   ownerId: string;
   orgId?: string;
   service: string;
@@ -25,10 +26,11 @@ export interface SecretDropRecord {
   destination?: Destination;
   threadRef?: string;
   requiresToken?: boolean;
+  memoryBrain?: { id: string; url: string };
   createdAt: number;
 }
 
-type SecretDropResult = { ok: true; rec: SecretDropRecord } | { ok: false; reason: "not_found" | "expired" };
+export type SecretDropResult = { ok: true; rec: SecretDropRecord } | { ok: false; reason: "not_found" | "expired" };
 
 export interface SecretDropStore {
   mint(rec: Omit<SecretDropRecord, "createdAt">, now?: number): Promise<{ dropId: string }>;
@@ -71,6 +73,7 @@ export function createSecretDropStore(
           continue;
         }
         if (
+          !r.memoryBrain &&
           r.orgId === rec.orgId &&
           r.audienceScopeId === rec.audienceScopeId &&
           r.threadRef === rec.threadRef &&

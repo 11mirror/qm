@@ -1,19 +1,22 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
-import { validateHeaderName, validateHeaderValue } from "node:http";
-import { HOP_BY_HOP } from "../util/http-proxy.ts";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { SurfaceUser } from "../surfaces/contract.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
 import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
+import { mergeCredentialFiles, type CredentialFileMerge } from "./file-merge.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { envKey } from "./connector-token.ts";
 import { connectorHostLabel } from "../connectors/oauth.ts";
+import { credentialInjectionError, type CredentialInjection } from "./credential-injection.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -27,86 +30,6 @@ export function isComposioHost(host: string): boolean {
 }
 
 type CredentialKind = "env" | "file" | "broker";
-
-export interface CredentialInjection {
-  header?: string;
-  scheme?: string;
-  actor?: boolean;
-  headers?: Record<string, string>;
-  signer?: "netsuite-tba";
-}
-
-const DEFAULT_AUTH_HEADER = "Authorization";
-const RESERVED_FIXED_HEADERS = new Set([
-  ...HOP_BY_HOP,
-  "authorization",
-  "content-encoding",
-  "content-length",
-  "content-type",
-  "cookie",
-  "expect",
-  "host",
-  "x-qm-actor",
-]);
-
-const headerError = (validate: () => void): boolean => {
-  try {
-    validate();
-    return false;
-  } catch {
-    return true;
-  }
-};
-
-function fixedHeadersError(headers: unknown, authHeader: string): string | undefined {
-  if (headers === undefined) return undefined;
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) return "injection.headers must be an object";
-  const seen = new Set<string>();
-  for (const [name, value] of Object.entries(headers)) {
-    const lower = name.toLowerCase();
-    if (headerError(() => validateHeaderName(name)))
-      return `injection.headers: "${name}" is not a valid HTTP header name`;
-    if (RESERVED_FIXED_HEADERS.has(lower) || lower === authHeader) return `injection.headers cannot set ${lower}`;
-    if (seen.has(lower)) return `injection.headers lists ${lower} more than once`;
-    seen.add(lower);
-    if (typeof value !== "string" || !value || headerError(() => validateHeaderValue(name, value)))
-      return `injection.headers.${name} must be a non-empty valid HTTP header value`;
-  }
-  return undefined;
-}
-
-export function credentialRequestHeaders(rec: {
-  injection?: CredentialInjection;
-  secret: string;
-}): Record<string, string> {
-  if (rec.injection?.signer) throw new Error("request-signing credential must use the credential broker");
-  const header = rec.injection?.header || DEFAULT_AUTH_HEADER;
-  const rawScheme = rec.injection?.scheme ?? "Bearer ";
-  const scheme = rawScheme && !/\s$/.test(rawScheme) ? `${rawScheme} ` : rawScheme;
-  return { ...rec.injection?.headers, [header]: `${scheme}${rec.secret}` };
-}
-
-export function credentialInjectionError(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return "injection must be an object";
-  const injection = value as CredentialInjection;
-  if (injection.signer !== undefined && injection.signer !== "netsuite-tba") return "unsupported credential signer";
-  if (
-    injection.signer &&
-    (injection.header !== undefined || injection.scheme !== undefined || injection.actor === true)
-  )
-    return "credential signer cannot be combined with header, scheme, or actor injection";
-  if (injection.actor !== undefined && typeof injection.actor !== "boolean") return "injection.actor must be boolean";
-  if (
-    injection.header !== undefined &&
-    (typeof injection.header !== "string" || headerError(() => validateHeaderName(injection.header!)))
-  )
-    return "authentication header must be a valid HTTP header name";
-  if (injection.header?.toLowerCase() === "x-qm-actor") return "x-qm-actor is reserved for broker actor attestation";
-  if (injection.scheme !== undefined && (typeof injection.scheme !== "string" || /[\r\n]/.test(injection.scheme)))
-    return "authentication value prefix must be a single line";
-  return fixedHeadersError(injection.headers, (injection.header || DEFAULT_AUTH_HEADER).toLowerCase());
-}
 
 interface BrokerDelivery {
   name: string;
@@ -172,6 +95,7 @@ export interface KeychainCredential {
   fingerprint: string;
   origin?: string;
   expiresAt?: number;
+  writer?: { holder: string; until: number };
   createdAt: number;
   updatedAt: number;
 }
@@ -195,6 +119,7 @@ export interface KeychainGrant {
   usedAt?: number;
   usedBy?: string;
   askId?: string;
+  botActor?: true;
 }
 
 type AskStatus = "pending" | "approved" | "declined" | "expired";
@@ -210,8 +135,10 @@ export interface KeychainAsk {
   requesterThreadRef?: string;
   requesterSeq?: number;
   requesterMessageTs?: string;
+  ownerSurfaceUser?: Pick<SurfaceUser, "surface" | "account" | "id">;
   purpose: string;
   requestedMode?: GrantMode;
+  botActor?: boolean;
   status: AskStatus;
   createdAt: number;
   expiresAt: number;
@@ -318,13 +245,10 @@ export interface OAuthToken {
   clientRef?: string;
   accountType?: string;
   orgId?: string;
-  /** OIDC id token, for providers whose API needs it alongside the access token (e.g. Codex). */
   idToken?: string;
-  /** Provider-side account identifier carried with the token (e.g. ChatGPT account id). */
   accountId?: string;
 }
 
-/** Derived, sandbox-safe view of a connector token: never carries the refresh token. */
 export interface DerivedOAuthAuth {
   accessToken: string;
   idToken?: string;
@@ -367,11 +291,6 @@ export interface ConnectorTokenStore {
   deleteConnectorToken(host: string, principalId: string, accountType?: string): Promise<void>;
   connectorTokenStatus(host: string, principalId: string, accountType?: string): Promise<OAuthTokenStatus>;
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
-  /**
-   * Fresh derived material for the connector token (access + id token +
-   * account id), refreshing single-flight if stale. The refresh token never
-   * leaves the keychain record.
-   */
   connectorDerivedAuth(host: string, principalId: string, accountType?: string): Promise<DerivedOAuthAuth | null>;
 }
 
@@ -397,6 +316,7 @@ interface CreateGrantInput {
   purpose: string;
   expiresAt?: number;
   askId?: string;
+  botActor?: boolean;
 }
 
 interface CreateAskInput {
@@ -408,8 +328,10 @@ interface CreateAskInput {
   requesterThreadRef?: string;
   requesterSeq?: number;
   requesterMessageTs?: string;
+  ownerSurfaceUser?: Pick<SurfaceUser, "surface" | "account" | "id">;
   purpose: string;
   requestedMode?: GrantMode;
+  botActor?: boolean;
   expiresAt?: number;
 }
 
@@ -445,6 +367,8 @@ interface MaterializedFileCred {
   grantId?: string;
   purpose?: string;
   writeback?: boolean;
+  live?: boolean;
+  baseline?: Record<string, string>;
 }
 
 export type MaterializedCred = ({ kind: "env" } & MaterializedEnvCred) | ({ kind: "file" } & MaterializedFileCred);
@@ -465,17 +389,23 @@ interface GrantListFilter {
 
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
-  updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<void>;
+  create(input: SaveCredentialInput): Promise<KeychainCredentialMeta | null>;
+  withLoginTicket<T>(ticketId: string, fn: () => Promise<T>): Promise<T>;
+  claimWriter(ownerId: string, id: string, writer: { holder: string; until: number }): Promise<boolean | null>;
+  releaseWriter(ownerId: string, id: string, holder: string): Promise<boolean | null>;
+  updateFiles(
+    materialized: Extract<MaterializedCred, { kind: "file" }>,
+    files: CredentialFile[],
+  ): Promise<CredentialFileSave>;
   writebackBaseline(
     source: FileCredentialSource,
-    fingerprint: string,
+    fileHashes: Record<string, string>,
   ): Promise<Extract<MaterializedCred, { kind: "file" }>>;
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
   listConnectorsByOwners(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   getCredential(id: string): Promise<KeychainCredentialMeta | null>;
-  /** Decrypt an env credential the caller OWNS — no grant machinery, never someone else's. */
   readOwnSecret(ownerId: string, credentialId: string): Promise<string | null>;
   remove(ownerId: string, id: string): Promise<boolean>;
 
@@ -490,14 +420,17 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   getGrant(id: string): Promise<KeychainGrant | null>;
   listGrants(filter: GrantListFilter): Promise<KeychainGrant[]>;
   revokeGrant(ownerId: string, grantId: string): Promise<boolean>;
-  grantsForScope(scopeId: ScopeId): Promise<Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }>>;
+  grantsForScope(
+    scopeId: ScopeId,
+    opts?: { includePersonGrants?: boolean },
+  ): Promise<Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }>>;
 
   createAsk(input: CreateAskInput): Promise<{ ask: KeychainAsk; existing: boolean }>;
   getAsk(id: string): Promise<KeychainAsk | null>;
   listAsks(filter: AskListFilter): Promise<KeychainAsk[]>;
   approveAsk(input: ApproveAskInput): Promise<{ ask: KeychainAsk; grant: KeychainGrant }>;
   declineAsk(input: { askId: string; ownerId: string; note?: string }): Promise<KeychainAsk>;
-  unnotifiedResolvedAsks(now: number): Promise<KeychainAsk[]>;
+  unnotifiedResolvedAsks(now: number): Promise<Array<KeychainAsk & { tenantId: string }>>;
   markAskNotified(id: string, status: KeychainAsk["status"]): Promise<void>;
 
   composioKey(ownerId: string, credentialId: string): Promise<string | null>;
@@ -531,9 +464,12 @@ export interface FileCredentialSource {
   service: string;
   grantId?: string;
   writeback?: boolean;
+  live?: boolean;
 }
 
-export function credentialFilesFingerprint(files: CredentialFile[]): string {
+export type CredentialFileSave = Pick<CredentialFileMerge, "overruled" | "withheld">;
+
+function credentialFilesFingerprint(files: CredentialFile[]): string {
   return fileCredentialFingerprint(
     files
       .map((file) => ({ ...file, mode: restoredFileMode(file.mode) }))
@@ -545,6 +481,10 @@ function fileCredentialFingerprint(files: CredentialFile[]): string {
   return fingerprintOf(JSON.stringify(files.map((f) => ({ ...f, path: homeRelativePath(f.path) }))));
 }
 
+export function credentialFileHashes(files: CredentialFile[]): Record<string, string> {
+  return Object.fromEntries(files.map((file) => [file.path, credentialFilesFingerprint([file])]));
+}
+
 function keychainFilePath(path: string): string {
   if (/[\n\r]/.test(path))
     throw new KeychainError(400, `file path may not contain line breaks: ${JSON.stringify(path)}`);
@@ -553,6 +493,10 @@ function keychainFilePath(path: string): string {
   } catch {
     throw new KeychainError(400, `file path must be home-relative: ${path}`);
   }
+}
+
+export function keychainService(service: string): string {
+  return service.trim().toLowerCase();
 }
 
 function credId(ownerId: string, service: string, slot: string): string {
@@ -578,6 +522,20 @@ function consumedGrant(grant: KeychainGrant): boolean {
   return grant.status === "used" || (grant.mode === "once" && grant.usedAt !== undefined);
 }
 
+function askTask(a: {
+  credentialId: string;
+  requesterScopeId: string;
+  requesterThreadRef?: string;
+  botActor?: boolean;
+}): string {
+  return JSON.stringify([
+    a.credentialId,
+    a.requesterScopeId,
+    cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef,
+    a.botActor === true,
+  ]);
+}
+
 function expired(rec: { expiresAt?: number }, now: number): boolean {
   return typeof rec.expiresAt === "number" && rec.expiresAt < now;
 }
@@ -587,7 +545,7 @@ function credExpired(rec: { kind: CredentialKind; expiresAt?: number }, now: num
 }
 
 function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: string }): KeychainCredentialMeta {
-  const { secretEnc: _, ...meta } = rec;
+  const { secretEnc: _, writer: __, ...meta } = rec;
   return {
     ...meta,
     ...((rec.kind === "env" || rec.kind === "file") && !isBackendCredential(rec)
@@ -835,8 +793,10 @@ export function createKeychain(deps: {
     token: OAuthToken,
     accountType?: string,
   ): Promise<KeychainCredential> {
-    const id = oauthId(host, principalId, accountType);
-    const rec = connectorRec(id, host, principalId, token, accountType, await deps.creds.get(id));
+    const prior = await connectorRecord(host, principalId, accountType);
+    const ownerId = prior?.ownerId ?? canonicalPerson(principalId);
+    const id = prior?.id ?? oauthId(host, ownerId, accountType);
+    const rec = connectorRec(id, host, ownerId, token, accountType, prior);
     await deps.creds.put(id, rec);
     return rec;
   }
@@ -846,7 +806,9 @@ export function createKeychain(deps: {
     principalId: string,
     accountType?: string,
   ): Promise<KeychainCredential | null> {
-    return deps.creds.get(oauthId(host, principalId, accountType));
+    const ids = [...new Set([principalId, ...personIds(principalId)])].map((id) => oauthId(host, id, accountType));
+    const recs = await deps.creds.getMany(ids);
+    return ids.map((id) => recs.find((rec) => rec.id === id)).find((rec) => rec !== undefined) ?? null;
   }
 
   function recToOAuthToken(rec: KeychainCredential): OAuthToken {
@@ -924,22 +886,23 @@ export function createKeychain(deps: {
   async function connectorTokenForRecord(rec: KeychainCredential): Promise<string | null> {
     const refresh = deps.refreshConnector;
     if (refresh && rec.refresh?.refreshTokenEnc && rec.host && refreshDue(rec)) {
-      let pending = inflightRefreshes.get(rec.id);
+      const refreshKey = `${currentTenant()}\0${rec.id}`;
+      let pending = inflightRefreshes.get(refreshKey);
       if (!pending) {
         pending = refreshAndStore(rec.id, rec.host, refresh).catch((e) => {
           console.error(`[keychain] connector token refresh could not run for ${rec.host}: ${errMessage(e)}`);
           return unexpiredAccessToken(rec);
         });
-        inflightRefreshes.set(rec.id, pending);
-        void pending.finally(() => inflightRefreshes.delete(rec.id));
+        inflightRefreshes.set(refreshKey, pending);
+        void pending.finally(() => inflightRefreshes.delete(refreshKey));
       }
       return pending;
     }
     return unexpiredAccessToken(rec);
   }
 
-  async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
-    const service = input.service.trim().toLowerCase();
+  function credentialRecord(input: SaveCredentialInput) {
+    const service = keychainService(input.service);
     if (!service) throw new KeychainError(400, "service required");
     let files: CredentialFile[] | undefined;
     if (input.files?.length) {
@@ -1000,13 +963,18 @@ export function createKeychain(deps: {
         fingerprint: fingerprintOf(secret),
         ...(input.origin ? { origin: input.origin } : {}),
         ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+        ...(prior?.writer ? { writer: prior.writer } : {}),
         createdAt: prior?.createdAt ?? t,
         updatedAt: t,
       };
     };
-    const rec = buildRec(await deps.creds.get(id));
-    await deps.creds.put(id, rec);
-    return toMeta(rec);
+    return { id, buildRec };
+  }
+
+  async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
+    const { id, buildRec } = credentialRecord(input);
+    const [rec] = await deps.creds.mutateMany([{ id, apply: buildRec }]);
+    return toMeta(rec!);
   }
 
   async function materializeConnectorEnv(
@@ -1133,17 +1101,21 @@ export function createKeychain(deps: {
       createdAt: t,
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.askId ? { askId: input.askId } : {}),
+      ...(input.botActor ? { botActor: true } : {}),
     };
     if (input.askId) return deps.grants.putIfAbsent(grant.id, grant);
     await deps.grants.put(grant.id, grant);
     return grant;
   }
 
+  const revokeActiveGrant = (id: string) =>
+    deps.grants.update(id, (current) =>
+      current.status === "active" ? { ...current, status: "revoked", revokedAt: now() } : current,
+    );
+
   async function deleteCredential(id: string): Promise<void> {
     for (const grant of await deps.grants.all()) {
-      if (grant.credentialId === id && grant.status === "active") {
-        await deps.grants.merge(grant.id, { status: "revoked", revokedAt: now() });
-      }
+      if (grant.credentialId === id && grant.status === "active") await revokeActiveGrant(grant.id);
     }
     await deps.creds.delete(id);
   }
@@ -1151,47 +1123,111 @@ export function createKeychain(deps: {
   return {
     save: saveCredential,
 
+    async create(input) {
+      const { id, buildRec } = credentialRecord(input);
+      const rec = buildRec();
+      return (await deps.creds.insertIfAbsent(id, rec)) ? toMeta(rec) : null;
+    },
+
+    withLoginTicket: (ticketId, fn) => lock.withLock(`keychain-login-ticket:${ticketId}`, fn),
+
+    async claimWriter(ownerId, id, writer) {
+      let claimed: boolean | null = null;
+      await deps.creds.update(id, (current) => {
+        if (!samePerson(current.ownerId, ownerId)) return current;
+        claimed = !current.writer || current.writer.holder === writer.holder || current.writer.until <= now();
+        return claimed ? { ...current, writer } : current;
+      });
+      return claimed;
+    },
+
+    async releaseWriter(ownerId, id, holder) {
+      let released: boolean | null = null;
+      await deps.creds.update(id, (current) => {
+        if (!samePerson(current.ownerId, ownerId)) return current;
+        released = !current.writer || current.writer.holder === holder || current.writer.until <= now();
+        if (!released) return current;
+        const { writer: _, ...rest } = current;
+        return rest;
+      });
+      return released;
+    },
+
     async updateFiles(materialized, files) {
-      if (!materialized.writeback) return;
+      const unchanged = { overruled: [], withheld: [] };
+      if (!materialized.writeback) return unchanged;
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
-      if (fingerprint(normalized) === fingerprint(materialized.files)) return;
+      const baseline = new Map(Object.entries(materialized.baseline ?? credentialFileHashes(materialized.files)));
+      const ours = Object.entries(credentialFileHashes(normalized));
+      if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return unchanged;
+      let overruled: string[] = [];
+      let withheld: CredentialFileMerge["withheld"] = [];
+      let byExpiry: Array<{ path: string; kept: string }> = [];
 
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
           throw new KeychainError(409, "Credential changed during execution");
         const currentFiles = decryptToFiles(current).files;
-        if (fingerprint(currentFiles) === fingerprint(normalized)) return current;
-        if (fingerprint(currentFiles) !== fingerprint(materialized.files))
-          throw new KeychainError(409, "Credential changed during execution; refreshed files were not saved");
-        const secret = JSON.stringify(normalized);
+        const merged = mergeCredentialFiles({
+          baseline,
+          stored: currentFiles,
+          refreshed: normalized,
+          hash: (file) => fingerprint([file]),
+          refreshOnly: !materialized.live,
+        });
+        overruled = merged.overruled;
+        withheld = merged.withheld;
+        byExpiry = merged.byExpiry;
+        const next = checkedFiles(merged.files);
+        if (!next.length) {
+          console.warn(
+            `[credentials] ${materialized.credentialId}: a save would have left no files, so the stored login was kept unchanged`,
+          );
+          return current;
+        }
+        if (fingerprint(next) === fingerprint(currentFiles)) return current;
+        const secret = JSON.stringify(next);
         return {
           ...current,
-          targets: normalized.map((file) => file.path),
+          targets: next.map((file) => file.path),
           secretEnc: encryptSecret(secret, deps.key),
           fingerprint: fingerprintOf(secret),
           updatedAt: now(),
         };
       });
       if (!updated) throw new KeychainError(410, "Credential was removed during execution");
+      if (overruled.length)
+        console.warn(
+          `[credentials] ${materialized.credentialId}: kept the stored version of ${overruled.join(", ")} over a concurrent change`,
+        );
+      if (withheld.length)
+        console.warn(
+          `[credentials] ${materialized.credentialId}: kept the stored version of ${withheld.map(({ path, reason }) => `${path} (${reason})`).join(", ")} because a run that isn't its owner's live turn saves only token refreshes`,
+        );
+      for (const { path, kept } of byExpiry)
+        console.warn(
+          `[credentials] ${materialized.credentialId}: kept the ${kept} version of ${path} over a concurrent change because it expires later`,
+        );
+      return { overruled, withheld };
     },
 
-    async writebackBaseline(source, fingerprint) {
+    async writebackBaseline(source, fileHashes) {
       const current = await deps.creds.get(source.credentialId);
       if (!current || current.kind !== "file" || !samePerson(current.ownerId, source.ownerId))
         throw new KeychainError(410, "Credential was removed during execution");
       const files = decryptToFiles(current).files;
-      if (credentialFilesFingerprint(files) !== fingerprint)
-        throw new KeychainError(409, "Credential changed during execution; refreshed files were not saved");
       return {
         kind: "file",
         credentialId: current.id,
         ownerId: current.ownerId,
         service: current.service,
         files,
+        baseline: fileHashes,
         ...(source.grantId ? { grantId: source.grantId } : {}),
         ...(source.writeback ? { writeback: true } : {}),
+        ...(source.live ? { live: true } : {}),
       };
     },
 
@@ -1236,9 +1272,9 @@ export function createKeychain(deps: {
     createGrant: mintGrant,
 
     async grantConnectorToScope({ host, principalId, accountType, audienceScopeId, purpose }) {
-      const id = oauthId(host, principalId, accountType);
-      const cred = await deps.creds.get(id);
+      const cred = await connectorRecord(host, principalId, accountType);
       if (!cred) return null;
+      const id = cred.id;
       for (const g of await deps.grants.all()) {
         if (
           g.credentialId === id &&
@@ -1249,7 +1285,7 @@ export function createKeychain(deps: {
           return g;
         }
       }
-      return mintGrant({ credentialId: id, ownerId: principalId, audienceScopeId, mode: "standing", purpose });
+      return mintGrant({ credentialId: id, ownerId: cred.ownerId, audienceScopeId, mode: "standing", purpose });
     },
 
     async getGrant(id) {
@@ -1271,13 +1307,14 @@ export function createKeychain(deps: {
     async revokeGrant(ownerId, grantId) {
       const g = await deps.grants.get(grantId);
       if (!g || !samePerson(g.ownerId, ownerId)) return false;
-      if (g.status === "active") await deps.grants.merge(grantId, { status: "revoked", revokedAt: now() });
+      await revokeActiveGrant(grantId);
       return true;
     },
 
-    async grantsForScope(scopeId) {
+    async grantsForScope(scopeId, opts) {
       const out: Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }> = [];
       for (const grant of await activeGrantsFor(scopeId)) {
+        if (!opts?.includePersonGrants && grant.botActor !== true) continue;
         const cred = await deps.creds.get(grant.credentialId);
         if (cred && (cred.managed === "connector" || !credExpired(cred, now())))
           out.push({ grant, credential: toMeta(cred) });
@@ -1301,11 +1338,10 @@ export function createKeychain(deps: {
       ) {
         throw new KeychainError(403, "personal requests require the credential owner's own conversation");
       }
-      const origin = cronIdOf(input.requesterThreadRef) ?? input.requesterThreadRef;
+      const task = askTask({ ...input, credentialId: cred.id });
       for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
         const a = await freshAsk(rec, t);
-        const sameOrigin = (cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef) === origin;
-        if (a.credentialId !== cred.id || a.requesterScopeId !== input.requesterScopeId || !sameOrigin) continue;
+        if (askTask(a) !== task) continue;
         if (a.status === "pending") return { ask: a, existing: true };
         if (a.status === "approved") break;
         if (input.triggered && (a.status === "declined" || a.status === "expired")) {
@@ -1326,8 +1362,10 @@ export function createKeychain(deps: {
         ...(input.requesterThreadRef ? { requesterThreadRef: input.requesterThreadRef } : {}),
         ...(input.requesterSeq !== undefined ? { requesterSeq: input.requesterSeq } : {}),
         ...(input.requesterMessageTs ? { requesterMessageTs: input.requesterMessageTs } : {}),
+        ...(input.ownerSurfaceUser ? { ownerSurfaceUser: input.ownerSurfaceUser } : {}),
         purpose,
         ...(input.requestedMode ? { requestedMode: input.requestedMode } : {}),
+        ...(input.botActor ? { botActor: true } : {}),
         status: "pending",
         createdAt: t,
         expiresAt: input.expiresAt ?? t + ASK_TTL_MS,
@@ -1369,6 +1407,7 @@ export function createKeychain(deps: {
           purpose: input.purpose,
           ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
           askId: ask.id,
+          ...(ask.botActor ? { botActor: true } : {}),
         });
         const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id, notifiedAt: undefined };
         await deps.asks.merge(ask.id, patch);
@@ -1393,20 +1432,22 @@ export function createKeychain(deps: {
     },
 
     async unnotifiedResolvedAsks(nowAt) {
-      const out: KeychainAsk[] = [];
-      const taskDecisions = new Set<string>();
-      for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
-        const a = await freshAsk(rec, nowAt);
-        const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
-        const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
-        const retainDecision =
-          origin !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
-        taskDecisions.add(task);
-        if (a.status === "pending") continue;
-        if (a.notifiedAt === undefined) out.push(a);
-        else if (!retainDecision && a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS) await deps.asks.delete(a.id);
-      }
-      return out;
+      const out = await claimThenBind(deps.asks.claimTenants, async () => {
+        const found: Array<KeychainAsk & { tenantId: string }> = [];
+        const taskDecisions = new Set<string>();
+        for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
+          const a = await freshAsk(rec, nowAt);
+          const task = askTask(a);
+          const retain =
+            a.requesterThreadRef !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
+          taskDecisions.add(task);
+          if (a.status === "pending") continue;
+          if (a.notifiedAt === undefined) found.push({ ...a, tenantId: currentTenant() });
+          else if (!retain && a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS) await deps.asks.delete(a.id);
+        }
+        return found;
+      });
+      return out.flat().sort((a, b) => b.createdAt - a.createdAt);
     },
 
     async markAskNotified(id, status) {
@@ -1479,7 +1520,8 @@ export function createKeychain(deps: {
     },
 
     async deleteConnectorToken(host, principalId, accountType) {
-      await deleteCredential(oauthId(host, principalId, accountType));
+      const rec = await connectorRecord(host, principalId, accountType);
+      if (rec) await deleteCredential(rec.id);
     },
 
     async connectorTokenStatus(host, principalId, accountType) {
@@ -1512,7 +1554,6 @@ export function createKeychain(deps: {
       if (!rec) return null;
       const accessToken = await connectorTokenForRecord(rec);
       if (accessToken === null) return null;
-      // Re-read: a refresh inside connectorTokenForRecord may have rotated the record.
       const fresh = (await connectorRecord(host, principalId, accountType)) ?? rec;
       const token = tryDecrypt(fresh, recToOAuthToken);
       if (!token) return null;
@@ -1649,7 +1690,6 @@ export function renderAskNotice(
 ): string {
   const { ask, credential } = input;
   const who = input.requesterName ? `${input.requesterName} (${ask.requesterId})` : ask.requesterId;
-  // Never surface a raw Slack scope id to a person — describe the place instead.
   let where: string;
   if (input.channelName) where = `**#${input.channelName.replace(/^#/, "")}**`;
   else if (input.scopeName) where = `**${input.scopeName}**`;

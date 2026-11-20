@@ -4,13 +4,21 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { scopeId as makeScopeId } from "../types.ts";
 import { type DecryptedServiceCredential, isValidCredentialSlug, isComposioHost } from "../credentials/keychain.ts";
 import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./credential-broker.ts";
-import { pipeToResponse, sendJson } from "./http.ts";
-import type { BaseCtx } from "./routes/route.ts";
+import { sendJson } from "./http.ts";
+import { relayStream } from "../../plugins/chassis/src/http.ts";
+import { tenantOf, type BaseCtx } from "./routes/route.ts";
 import { proxyHeaders } from "../util/http-proxy.ts";
 
 export const GIT_HTTP_BROKER_PREFIX = "/v1/credentials/git/";
 
-const ALLOWED_GIT_HEADERS = new Set(["accept", "content-length", "content-type", "git-protocol", "user-agent"]);
+const ALLOWED_GIT_HEADERS = new Set([
+  "accept",
+  "content-encoding",
+  "content-length",
+  "content-type",
+  "git-protocol",
+  "user-agent",
+]);
 
 interface GitHttpFetchResponse {
   status: number;
@@ -73,14 +81,14 @@ function responseHeaders(headers: Record<string, string> | undefined): Record<st
 }
 
 function recordDenied(ctx: BaseCtx, claims: CapabilityClaims, slug: string, host: string, code: string): void {
-  ctx.deps.credentialUsage?.record({
+  ctx.deps.credentialUsage?.record(tenantOf(ctx), {
     slug,
     host,
     status: "denied",
     scopeLabel: claims.scopeId,
     principalId: claims.actorId,
   });
-  ctx.deps.auditLog?.record({
+  ctx.deps.auditLog?.record(tenantOf(ctx), {
     at: Date.now(),
     principalId: claims.actorId,
     action: "credential.git.denied",
@@ -164,14 +172,14 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
       ...(method === "POST" ? { body: ctx.req } : {}),
     });
   } catch {
-    ctx.deps.credentialUsage?.record({
+    ctx.deps.credentialUsage?.record(tenantOf(ctx), {
       slug,
       host: rec.host,
       status: "error",
       scopeLabel: claims.scopeId,
       principalId: claims.actorId,
     });
-    ctx.deps.auditLog?.record({
+    ctx.deps.auditLog?.record(tenantOf(ctx), {
       at: Date.now(),
       principalId: claims.actorId,
       action: "credential.git.error",
@@ -185,7 +193,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
     });
   }
 
-  ctx.deps.credentialUsage?.record({
+  ctx.deps.credentialUsage?.record(tenantOf(ctx), {
     slug,
     host: rec.host,
     status: "ok",
@@ -193,7 +201,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
     scopeLabel: claims.scopeId,
     principalId: claims.actorId,
   });
-  ctx.deps.auditLog?.record({
+  ctx.deps.auditLog?.record(tenantOf(ctx), {
     at: Date.now(),
     principalId: claims.actorId,
     action: "credential.git.use",
@@ -206,5 +214,5 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
     ctx.res.end();
     return;
   }
-  pipeToResponse(ctx.res, upstreamResp.body, "git upstream stream failed");
+  relayStream(upstreamResp.body, ctx.res);
 }

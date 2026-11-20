@@ -1,7 +1,15 @@
 import type { Principal, ScopeId } from "../types.ts";
+import { atLeast, type PersonaRole } from "../personas/persona-schema.ts";
 import { actsAsScope, parseScopeId, scopeId } from "../types.ts";
-import { samePerson } from "../directory/person.ts";
+import { canonicalPerson, samePerson } from "../directory/person.ts";
+import type {
+  ChannelMembershipFacts,
+  DirectoryMember,
+  DirectoryStore,
+  ScopeMembershipFacts,
+} from "../directory/directory-store.ts";
 import { swallowAs } from "../util/errors.ts";
+import { type Tenant, ambientTenant } from "../tenants/context.ts";
 
 export interface ManagedGroupDirectory {
   recognizes(groupId: string): boolean;
@@ -12,7 +20,7 @@ export interface ManagedGroupDirectory {
   slackChannel?(groupId: string): Promise<{ channelId: string; channelName: string } | undefined>;
 }
 
-interface ScopeMembershipDeps {
+export interface ScopeMembershipDeps {
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "membership" | "members">;
   directory?: {
     channelMember(channelId: string, principalId: string): Promise<boolean>;
@@ -20,6 +28,7 @@ interface ScopeMembershipDeps {
     channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
     groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
+    rosterCoversAudience?(channelId: string): Promise<boolean | undefined>;
     conversationMembers?(
       kind: "channel" | "group",
       id: string,
@@ -30,12 +39,24 @@ interface ScopeMembershipDeps {
   identity?: {
     classify(externalId: string, isExternalGuest?: boolean): { type?: string; teamIds?: readonly string[] };
   };
-  teams?: { isMember(principalId: string, teamId: string): Promise<boolean> };
+  teams?: { isMember(tenant: Tenant, principalId: string, teamId: string): Promise<boolean> };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
+  personas?: { role(principalId: string, personaId: string): Promise<PersonaRole | null> };
+}
+
+async function personaRoleAtLeast(
+  deps: ScopeMembershipDeps,
+  principalId: string,
+  personaId: string,
+  floor: PersonaRole,
+): Promise<boolean> {
+  return atLeast(await deps.personas?.role(principalId, personaId), floor);
 }
 
 async function teamMember(deps: ScopeMembershipDeps, principalId: string, teamId: string): Promise<boolean> {
-  return activePrincipal(deps, principalId) && (await deps.teams?.isMember(principalId, teamId)) === true;
+  return (
+    activePrincipal(deps, principalId) && (await deps.teams?.isMember(ambientTenant(), principalId, teamId)) === true
+  );
 }
 
 function activePrincipal(deps: ScopeMembershipDeps, principalId: string): boolean {
@@ -161,6 +182,7 @@ export function createCurrentScopeMembers(deps: ScopeMembershipDeps, requireComp
 
     if (!deps.directory?.list) return undefined;
     if (kind === "channel" && (await deps.directory.channelPrivacy?.(ref)) !== true) return undefined;
+    if (kind === "channel" && (await deps.directory.rosterCoversAudience?.(ref)) === false) return [];
 
     const candidates = await deps.directory.list();
     const membership = kind === "channel" ? deps.directory.channelMember : deps.directory.groupMember;
@@ -184,6 +206,7 @@ export function createCanReadScope(deps: ScopeMembershipDeps): CanReadScope {
     if (kind === "org") return deps.identity?.classify(principalId).type === "internal";
     if (kind === "personal") return samePerson(ref, principalId);
     if (kind === "team") return teamMember(deps, principalId, ref);
+    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "read");
     if (kind === "group") return memberOfSharedScope(deps, kind, ref, principalId, targetScope);
     if (kind === "channel") {
       if (await memberOfSharedScope(deps, kind, ref, principalId, targetScope)) return true;
@@ -200,6 +223,7 @@ export function createCanWriteScope(deps: ScopeMembershipDeps) {
     if (kind === "org") return true;
     if (kind === "personal") return samePerson(ref, principalId);
     if (kind === "team") return teamMember(deps, principalId, ref);
+    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
     if (kind === "channel" || kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
     return false;
   };
@@ -220,6 +244,7 @@ export function createCanManageScope(deps: ScopeMembershipDeps): CanManageScope 
     if (!principalId || !activePrincipal(deps, principalId)) return false;
     const { kind, ref } = parseScopeId(scope);
     if (kind === "personal") return samePerson(ref, principalId);
+    if (kind === "persona") return personaRoleAtLeast(deps, principalId, ref, "write");
     if (kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
     if (kind === "channel")
       return (await channelPrivacy(deps, ref)) === true && currentSharedScopeMember(deps, kind, ref, principalId);
@@ -247,4 +272,100 @@ export function createManagesArtifactHome(
 
 export function rosterAdmits(roster: readonly string[], principalId: string, scope: ScopeId): boolean {
   return actsAsScope(principalId, scope) || roster.includes(principalId);
+}
+
+type ScopeMembershipSources = Omit<ScopeMembershipDeps, "directory" | "managedGroups" | "personas" | "teams"> & {
+  directory: Pick<DirectoryStore, "getMany" | "channelMemberships" | "groupMemberships">;
+  managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members"> & {
+    membersMany(groupIds: readonly string[]): Promise<Map<string, string[]>>;
+  };
+  personas?: { roles(principalId: string): Promise<Map<string, PersonaRole>> };
+  teams?: { memberTeams(principalId: string, teamIds: readonly string[]): Promise<ReadonlySet<string>> };
+};
+
+export async function scopeMembershipSnapshot(
+  sources: ScopeMembershipSources,
+  principalId: string,
+  scopes: readonly ScopeId[],
+  people: readonly string[] = [],
+) {
+  const refs = (kind: "channel" | "group" | "team") => [
+    ...new Set(
+      scopes.flatMap((scope) => {
+        const parsed = parseScopeId(scope);
+        return parsed.kind === kind ? [parsed.ref] : [];
+      }),
+    ),
+  ];
+  const channels = refs("channel");
+  const groups = refs("group");
+  const teamIds = refs("team");
+  const { directory, managedGroups, personas, teams } = sources;
+  const members = await directory
+    .getMany([...new Set([principalId, ...people].flatMap((id) => [id, canonicalPerson(id)]))])
+    .catch(swallowAs("scope membership: directory lookup", new Map<string, DirectoryMember>()));
+  const member = members.get(principalId);
+  const aliases = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
+  const [channelFacts, groupFacts, projectMembers, roles, memberTeams] = await Promise.all([
+    Promise.all(
+      aliases.map(
+        async (id) =>
+          [
+            id,
+            await directory
+              .channelMemberships(channels, id)
+              .catch(swallowAs("scope membership: channel", new Map<string, ChannelMembershipFacts>())),
+          ] as const,
+      ),
+    ),
+    Promise.all(
+      aliases.map(
+        async (id) =>
+          [
+            id,
+            await directory
+              .groupMemberships(groups, id)
+              .catch(swallowAs("scope membership: group", new Map<string, ScopeMembershipFacts>())),
+          ] as const,
+      ),
+    ),
+    managedGroups
+      ?.membersMany(groups.filter((ref) => managedGroups.recognizes(ref)))
+      .catch(swallowAs("scope membership: managed group", new Map<string, string[]>())),
+    scopes.some((scope) => parseScopeId(scope).kind === "persona")
+      ? personas?.roles(principalId).catch(swallowAs("scope membership: persona roles", new Map<string, PersonaRole>()))
+      : undefined,
+    teams
+      ?.memberTeams(principalId, teamIds)
+      .catch(swallowAs("scope membership: teams", new Set<string>() as ReadonlySet<string>)),
+  ]);
+  const channelsBy = new Map(channelFacts);
+  const groupsBy = new Map(groupFacts);
+  return {
+    ...(sources.identity ? { identity: sources.identity } : {}),
+    ...(teams
+      ? {
+          teams: {
+            isMember: async (_tenant: Tenant, _id: string, teamId: string) => memberTeams?.has(teamId) === true,
+          },
+        }
+      : {}),
+    directory: {
+      get: async (id: string) => members.get(id) ?? null,
+      channelMember: async (ref: string, id: string) => channelsBy.get(id)?.get(ref)?.member === true,
+      channelMembership: async (ref: string, id: string) => channelsBy.get(id)?.get(ref)?.membership,
+      channelPrivacy: async (ref: string) => channelsBy.get(principalId)?.get(ref)?.isPrivate,
+      groupMember: async (ref: string, id: string) => groupsBy.get(id)?.get(ref)?.member === true,
+      groupMembership: async (ref: string, id: string) => groupsBy.get(id)?.get(ref)?.membership,
+    },
+    ...(managedGroups
+      ? {
+          managedGroups: {
+            ...managedGroups,
+            membership: async (ref: string, id: string) => projectMembers?.get(ref)?.includes(id),
+          },
+        }
+      : {}),
+    ...(personas ? { personas: { role: async (_id: string, persona: string) => roles?.get(persona) ?? null } } : {}),
+  } satisfies ScopeMembershipDeps;
 }

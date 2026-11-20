@@ -47,6 +47,7 @@ test("restart reconstruction opens workers through real session syscalls as an a
     runs,
     signals,
     advisoryLock: testAdvisoryLock(),
+    steerRun: async () => ({ sent: false }),
     maxAttempts: 3,
   });
   const api = await reconstructFinnyParentSyscalls({

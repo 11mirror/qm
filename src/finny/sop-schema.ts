@@ -103,7 +103,4 @@ export const FINNY_SOP_SCHEMA = Type.Object(
   { additionalProperties: false },
 );
 
-export const FINNY_SOP_VALUES_SCHEMA = Type.Record(
-  Type.String({ minLength: 1 }),
-  Type.Union([text(), Type.Boolean()]),
-);
+export const FINNY_SOP_VALUES_SCHEMA = Type.Record(Type.String({ minLength: 1 }), Type.Union([text(), Type.Boolean()]));

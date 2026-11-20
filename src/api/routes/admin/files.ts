@@ -2,9 +2,12 @@ import { parseScopeId } from "../../../types.ts";
 import { ByteSourceTooLargeError } from "../../../files/durable-byte-store.ts";
 import { fileArtifactId } from "../../../files/file-artifact-store.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
-import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../../http.ts";
+import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
+import { relayStream } from "../../../../plugins/chassis/src/http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import { browserUploadFields, stageBrowserUpload } from "../blobs.ts";
+import { usesBrowserSession } from "../route.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
 import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";
 
 const FILE_PREVIEW_MAX_BYTES = 256 * 1024;
@@ -19,7 +22,7 @@ export async function readAdminFile(ctx: ApiCtx): Promise<void> {
   if (!art) return sendJson(res, 404, { error: "not_found" });
   const actor = await authorizeAdmin(ctx, art.ownerScopeId);
   if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "file.read", resource: art.path, scopeLabel: art.ownerScopeId });
+  audit(ctx, { principalId: actor.id, action: "file.read", resource: art.path, scopeLabel: art.ownerScopeId });
   const opened = await deps.files.open(id);
   if (!opened) return sendJson(res, 404, { error: "not_found" });
   const chunks: Buffer[] = [];
@@ -59,7 +62,7 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const mime = art.mimetype.split(";")[0]!.trim().toLowerCase();
   const inline = /^(image\/(png|jpeg|gif|webp|avif|bmp)|application\/pdf|text\/plain)$/.test(mime);
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: inline ? "file.view" : "file.download",
     resource: art.path,
@@ -74,7 +77,7 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
     "x-content-type-options": "nosniff",
     ...(inline ? { "cache-control": "private, max-age=300", "content-security-policy": "sandbox" } : {}),
   });
-  pipeToResponse(res, opened.stream, "file read failed");
+  relayStream(opened.stream, res);
   return;
 }
 
@@ -84,10 +87,10 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
   if (!authz) return;
   const { actor, scope } = authz;
   const nameQuery = (url.searchParams.get("q") ?? "").trim();
-  audit(deps, { principalId: actor.id, action: "files.read", resource: "files", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "files.read", resource: "files", scopeLabel: scope });
   if (!deps.files) return sendJson(res, 200, { scopeId: scope, files: [] });
   const orgWide = parseScopeId(scope).kind === "org";
-  const scopes = orgWide ? [...(await discoverScopes(app, deps)).keys()] : [scope];
+  const scopes = orgWide ? [...(await discoverScopes(app, deps, tenantOf(ctx))).keys()] : [scope];
   const files: Array<{
     id: string;
     scopeId: string;
@@ -132,7 +135,14 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
   if (!deps.blobTransfer)
     return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
   const { actor, scope } = authz;
-  const b = body as { blobId?: unknown; name?: unknown; mimetype?: unknown };
+  const streamed = usesBrowserSession(ctx.req, { browser: "self" });
+  const staged = streamed ? await stageBrowserUpload(ctx) : null;
+  if (streamed && !staged) return;
+  const b = (staged ? { blobId: staged.blobId, ...browserUploadFields(ctx) } : body) as {
+    blobId?: unknown;
+    name?: unknown;
+    mimetype?: unknown;
+  };
   const blobId = typeof b.blobId === "string" ? b.blobId.trim() : "";
   const name = safeAttachmentName(typeof b.name === "string" ? b.name : "");
   const mimetype =
@@ -158,7 +168,7 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
       createdInScope: scope,
       maxBytes: MAX_ATTACHMENT_BYTES,
     });
-    audit(deps, { principalId: actor.id, action: "file.upload", resource: path, scopeLabel: scope });
+    audit(ctx, { principalId: actor.id, action: "file.upload", resource: path, scopeLabel: scope });
     return sendJson(res, 200, {
       file: {
         id: artifact.id,

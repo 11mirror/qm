@@ -24,8 +24,9 @@ that planned controls will ship.
 ### Scope
 
 QM's interactive agent surfaces currently assume one organization of authenticated
-internal users. Guests and external users are outside that interaction boundary,
-apart from a deployment's explicit, admin-controlled exception for internal users in
+internal users. Guests and external users are outside that interaction boundary
+unless an org admin has invited their address, and then only until that invitation
+expires, apart from a deployment's explicit, admin-controlled exception for internal users in
 Slack rooms that include external participants. Published apps are a separate,
 deliberate exception: an owner can distribute a capability link to visitors outside
 the organization. Holding that link authorizes reach to that app only; it does not
@@ -132,10 +133,10 @@ these, not through them.
 
 ### Known limitations
 
-- **Command policy is bypassable.** It classifies shell text and catches configured or
-  common dangerous forms, but obfuscation, encoding, or writing and then executing a
-  script can evade it. It is a speed bump against mistakes and injection, not a
-  sandbox boundary.
+- **Command policy is bypassable.** It classifies shell text against the rules an
+  administrator configures, and none ship by default. Obfuscation, encoding, or writing
+  and then executing a script can evade a configured rule. It is a speed bump against
+  mistakes and injection, not a sandbox boundary.
 - **Open sharing relies on model discretion after authorization.** Server-side policy,
   identity, membership, source bounds, and read-only capability checks determine which
   resources can enter a turn, but they cannot ensure the model keeps relevant private data
@@ -183,11 +184,13 @@ these, not through them.
   to an intended recipient. The gateway removes the token from the address bar and
   places it in a one-day browser cookie, but copied links remain usable and app ACL
   changes do not revoke individual link holders.
-- **The spend export token is bearer authorization for org-wide spend.** When
+- **The spend export token is bearer authorization for org-wide spend and app lists.** When
   `SPEND_EXPORT_TOKEN` is set, anyone holding it can read every scope's daily model-call
   spend: per-person totals, channel and group names, the model mix, and each billed
-  cron's title, owner, scope, schedule and state. It reads no conversation content or
-  cron task and changes nothing, and each export is audited, but the token is
+  cron's title, owner, scope, schedule and state. It can also list, for any person it
+  names, the apps that person can open: name, title, address, creator and permission.
+  It reads no conversation content, cron task or app contents and changes nothing, and
+  each export is audited, but the token is
   not bound to a caller. Rotating it means replacing the secret in core and in every
   consumer; core accepts only the current value after it restarts with the new one.
 - **Everyone sees the spend of the spaces they can see.** The My spend tab in Settings shows each
