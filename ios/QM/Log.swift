@@ -9,11 +9,21 @@ enum Log {
 
 extension Logger {
   func failure(_ action: String, _ error: Error) {
-    guard !Task.isCancelled, !(error is CancellationError),
-      (error as? URLError)?.code != .cancelled
+    guard !(error is CancellationError), (error as? URLError)?.code != .cancelled
     else { return }
     self.error(
       "\(action, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+  }
+}
+
+extension FileManager {
+  func removeItemIfPresent(at url: URL, action: String) {
+    do {
+      try removeItem(at: url)
+    } catch let error as CocoaError where error.code == .fileNoSuchFile {
+    } catch {
+      Log.background.failure(action, error)
+    }
   }
 }
 

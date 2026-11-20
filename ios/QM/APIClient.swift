@@ -170,7 +170,7 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
       try check(response, generation: current)
       return (file, response.suggestedFilename)
     } catch {
-      try? FileManager.default.removeItem(at: file)
+      FileManager.default.removeItemIfPresent(at: file, action: "Deleting rejected download")
       throw error
     }
   }

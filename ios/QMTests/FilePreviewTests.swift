@@ -148,9 +148,11 @@ final class FilePreviewTests: XCTestCase {
     XCTAssertEqual(FilePreviewResource.filename(".."), "Attachment")
     XCTAssertEqual(FilePreviewResource.filename("report\n.pdf"), "report_.pdf")
     XCTAssertEqual(FilePreviewResource.filename(nil), "Attachment")
-    let long = FilePreviewResource.filename(String(repeating: "a", count: 400) + ".pdf")
-    XCTAssertLessThanOrEqual(long.utf8.count, 180)
-    XCTAssertTrue(long.hasSuffix(".pdf"))
+    let long = String(repeating: "a", count: 400) + ".pdf"
+    XCTAssertEqual(FilePreviewResource.filename(long), long)
+    let local = FilePreviewResource.localFilename(long)
+    XCTAssertEqual(local.utf8.count, Int(NAME_MAX))
+    XCTAssertTrue(local.hasSuffix(".pdf"))
   }
 
   func testTransferTypeUsesTheFileExtensionAndFallsBackWithoutInventingAType() {

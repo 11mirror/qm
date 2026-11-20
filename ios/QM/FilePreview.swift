@@ -72,7 +72,10 @@ enum FilePreviewResource {
         throw QMError.message("This attachment does not have a downloadable file reference.")
       }
       let downloaded = try await client.download(path)
-      defer { try? FileManager.default.removeItem(at: downloaded.url) }
+      defer {
+        FileManager.default.removeItemIfPresent(
+          at: downloaded.url, action: "Deleting preview download")
+      }
       try Task.checkCancellation()
       loaded = try TemporaryPreviewFile(
         moving: downloaded.url,
@@ -156,7 +159,19 @@ enum FilePreviewResource {
           allowed.contains($0) ? $0 : UnicodeScalar(95)!
         })
     ).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
-    return safe.isEmpty ? "Attachment" : String(safe.suffix(180))
+    return safe.isEmpty ? "Attachment" : safe
+  }
+
+  static func localFilename(_ name: String?) -> String {
+    let safe = filename(name)
+    let maximum = Int(NAME_MAX)
+    guard safe.utf8.count > maximum else { return safe }
+    let suffix = URL(fileURLWithPath: safe).pathExtension
+    let extensionPart = suffix.isEmpty ? "" : ".\(suffix)"
+    guard extensionPart.utf8.count < maximum else {
+      return String(safe.prefix(maximum))
+    }
+    return String(safe.prefix(maximum - extensionPart.utf8.count)) + extensionPart
   }
 
   static func typeDescription(_ name: String?) -> String {
@@ -178,12 +193,14 @@ final class TemporaryPreviewFile {
   init(data: Data, name: String?) throws {
     directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString, isDirectory: true)
-    url = directory.appendingPathComponent(FilePreviewResource.filename(name), isDirectory: false)
+    url = directory.appendingPathComponent(
+      FilePreviewResource.localFilename(name), isDirectory: false)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
     do {
       try data.write(to: url, options: [.atomic, .completeFileProtection])
     } catch {
-      try? FileManager.default.removeItem(at: directory)
+      FileManager.default.removeItemIfPresent(
+        at: directory, action: "Deleting failed preview directory")
       throw error
     }
   }
@@ -191,21 +208,25 @@ final class TemporaryPreviewFile {
   init(moving source: URL, name: String?) throws {
     directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString, isDirectory: true)
-    url = directory.appendingPathComponent(FilePreviewResource.filename(name), isDirectory: false)
+    url = directory.appendingPathComponent(
+      FilePreviewResource.localFilename(name), isDirectory: false)
     do {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
       try FileManager.default.moveItem(at: source, to: url)
       try FileManager.default.setAttributes(
         [.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
     } catch {
-      try? FileManager.default.removeItem(at: directory)
-      try? FileManager.default.removeItem(at: source)
+      FileManager.default.removeItemIfPresent(
+        at: directory, action: "Deleting failed preview directory")
+      FileManager.default.removeItemIfPresent(
+        at: source, action: "Deleting failed preview source")
       throw error
     }
   }
 
   deinit {
-    try? FileManager.default.removeItem(at: directory)
+    FileManager.default.removeItemIfPresent(
+      at: directory, action: "Deleting preview directory")
   }
 }
 

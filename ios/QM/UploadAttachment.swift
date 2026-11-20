@@ -29,7 +29,10 @@ enum AttachmentCache {
     defer { withExtendedLifetime(prepared) {} }
     try validateSHA(prepared.sha)
     let staging = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: staging) }
+    defer {
+      FileManager.default.removeItemIfPresent(
+        at: staging, action: "Deleting attachment cache staging file")
+    }
     try FileManager.default.copyItem(at: prepared.url, to: staging)
     try FileManager.default.setAttributes(
       [.protectionKey: FileProtectionType.complete], ofItemAtPath: staging.path)
@@ -129,7 +132,10 @@ final class PreparedAttachment: Sendable {
     self.sha = sha
   }
 
-  deinit { try? FileManager.default.removeItem(at: url) }
+  deinit {
+    FileManager.default.removeItemIfPresent(
+      at: url, action: "Deleting prepared attachment")
+  }
 }
 
 enum AttachmentUpload {
@@ -177,7 +183,12 @@ enum AttachmentUpload {
         attributes: [.protectionKey: FileProtectionType.complete])
     else { throw QMError.message("Could not prepare this attachment on the device.") }
     var retained = false
-    defer { if !retained { try? FileManager.default.removeItem(at: staging) } }
+    defer {
+      if !retained {
+        FileManager.default.removeItemIfPresent(
+          at: staging, action: "Deleting incomplete attachment")
+      }
+    }
     var resources = URLResourceValues()
     resources.isExcludedFromBackup = true
     try staging.setResourceValues(resources)
@@ -277,7 +288,10 @@ struct PickedMedia: Transferable {
       return try await AttachmentUpload.prepare(url)
     case .media(let name, let load):
       let url = try await load()
-      defer { try? FileManager.default.removeItem(at: url) }
+      defer {
+        FileManager.default.removeItemIfPresent(
+          at: url, action: "Deleting imported media")
+      }
       let suffix = url.pathExtension
       return try await AttachmentUpload.prepare(
         url, name: suffix.isEmpty ? name : "\(name).\(suffix)")
