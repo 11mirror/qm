@@ -164,6 +164,14 @@ function querySettings(tenant: string | undefined, timeoutMs: number | undefined
   return [...tenantSettings(tenant), ["statement_timeout", String(Math.round(timeoutMs))]];
 }
 
+function transactionSettings(tenant: string | undefined): PgSetting[] {
+  const settings = tenantSettings(tenant);
+  const idleTimeout = poolingConfig.idleInTransactionTimeoutMs ?? 60_000;
+  return idleTimeout > 0
+    ? [...settings, ["idle_in_transaction_session_timeout", String(Math.round(idleTimeout))]]
+    : settings;
+}
+
 function settingsQuery(settings: readonly PgSetting[]): { text: string; values: string[] } {
   const assignments = settings.map((_, i) => `set_config($${2 * i + 1}, $${2 * i + 2}, true)`);
   return { text: `SELECT ${assignments.join(", ")}`, values: settings.flat() };
@@ -238,7 +246,7 @@ async function runPgTransaction<T>(
   const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
-    const settings = tenantSettings(tenant);
+    const settings = transactionSettings(tenant);
     await untraced(() => client.query("BEGIN"));
     if (settings.length) await untraced(() => client.query(settingsQuery(settings)));
     const result = await fn(client);
