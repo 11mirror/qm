@@ -11,6 +11,8 @@ import { ephemeralCredLinkScript, type CredentialPathSpec } from "../credentials
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type { ExecOptions, ExecResult, ProvisionOptions, SandboxHandle, TeardownOptions } from "./sandbox.ts";
+import { TenantKeyedMap } from "./tenant-sandbox-shape.ts";
+import { boundTenant } from "../tenants/context.ts";
 
 const WORKSPACE_BASENAME = "workspace";
 const PREP_TIMEOUT_SEC = 60;
@@ -78,10 +80,12 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
   const instanceName =
     deps.instanceName ??
     (async (scope: string, scratch: boolean) => sandboxScopeName(scratch ? `${prefix}-scratch` : prefix, scope));
-  const provisionQueue = createKeyedQueue<string>();
-  const scopeByName = new Map<string, string>();
-  const scratchKeyByName = new Map<string, string>();
-  const activeScratch = new Map<string, number>();
+  const queued = createKeyedQueue<string>();
+  const provisionQueue = <T>(key: string, fn: () => Promise<T>): Promise<T> =>
+    queued(`${boundTenant() ?? ""}\0${key}`, fn);
+  const scopeByName = new TenantKeyedMap<string>();
+  const scratchKeyByName = new TenantKeyedMap<string>();
+  const activeScratch = new TenantKeyedMap<number>();
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
     const name = await instanceName(key, true);

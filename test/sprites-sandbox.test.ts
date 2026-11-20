@@ -100,6 +100,24 @@ test("tenants with the same sprite name keep separate provider credentials", asy
   await withTenant(second, () => shared.computerStatus!(scope));
   await withTenant(first, () => shared.computerStatus!(scope));
   assert.equal(fake.calls.filter(({ token }) => token).at(-1)?.token, "tenant-a-token");
+  const firstScratch = await withTenant(first, () => shared.provision(scope, { scratch: { key: "same-job" } }));
+  const secondScratch = await withTenant(second, () => shared.provision(scope, { scratch: { key: "same-job" } }));
+  assert.equal(firstScratch.id, secondScratch.id);
+  const scratchCreates = fake.calls.filter(({ method, path }) => method === "POST" && path === "/v1/sprites");
+  assert.deepEqual(
+    scratchCreates.slice(-2).map(({ token }) => token),
+    ["tenant-a-token", "tenant-b-token"],
+  );
+  const beforeTeardown = fake.calls.length;
+  await withTenant(first, () => shared.teardown(firstScratch));
+  await withTenant(second, () => shared.teardown(secondScratch));
+  const scratchDeletes = fake.calls
+    .slice(beforeTeardown)
+    .filter(({ method, path }) => method === "DELETE" && path === `/v1/sprites/${firstScratch.id}`);
+  assert.deepEqual(
+    scratchDeletes.map(({ token }) => token),
+    ["tenant-a-token", "tenant-b-token"],
+  );
 });
 
 test("streams and exit codes are exact", async () => {
