@@ -158,7 +158,7 @@ interface FinnyRuntimeActionInput {
 
 export function createPostgresFinnyRuntimeStore(connectionString: string) {
   const pg = createPgPool(connectionString, [
-    { id: "finny/runtime/0001", statements: SCHEMA },
+    { id: "finny/runtime/0001", upgradeFrom: "finny/store/0001", statements: SCHEMA },
     { id: "finny/runtime/0002", statements: EXPIRY_SCHEMA },
     { id: "finny/runtime/0003-dispatch-cancellation", statements: DISPATCH_CANCELLATION_SCHEMA },
   ]);

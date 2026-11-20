@@ -360,7 +360,7 @@ function migrationsInDependencyOrder(migrations: readonly PgMigration[]): PgMigr
     visited.add(migration.id);
     ordered.push(migration);
   };
-  for (const migration of [...migrations].sort((a, b) => a.id.localeCompare(b.id))) visit(migration);
+  for (const migration of migrations) visit(migration);
   return ordered;
 }
 
@@ -566,6 +566,28 @@ export function registeredPgMigrations(connectionString: string): readonly PgMig
   return [...(registeredMigrations.get(connectionString)?.values() ?? [])].sort((a, b) => a.id.localeCompare(b.id));
 }
 
+function migrationsWithRegisteredPredecessors(
+  connectionString: string,
+  migrations: readonly PgMigration[],
+): PgMigration[] {
+  const registered = registeredMigrations.get(connectionString);
+  const visiting = new Set<string>();
+  const included = new Set<string>();
+  const ordered: PgMigration[] = [];
+  const include = (migration: PgMigration): void => {
+    if (included.has(migration.id)) return;
+    if (visiting.has(migration.id)) throw new Error(`pg-pool: migration dependency cycle at ${migration.id}`);
+    visiting.add(migration.id);
+    const predecessor = migration.upgradeFrom ? registered?.get(migration.upgradeFrom) : undefined;
+    if (predecessor) include(predecessor);
+    visiting.delete(migration.id);
+    included.add(migration.id);
+    ordered.push(migration);
+  };
+  for (const migration of migrations) include(migration);
+  return ordered;
+}
+
 export async function migrateRegisteredPgSchemas(connectionString?: string): Promise<void> {
   const databases = connectionString
     ? [[connectionString, registeredMigrations.get(connectionString)] as const]
@@ -607,7 +629,7 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
   async function ready(): Promise<void> {
     if (closed) throw new Error("Postgres store is closed");
     await (readyP ??= withMigrationPool(async (instance) => {
-      await applyPgMigrations(instance, migrations);
+      await applyPgMigrations(instance, migrationsWithRegisteredPredecessors(connectionString, migrations));
     }).catch((error) => {
       readyP = null;
       throw error;
