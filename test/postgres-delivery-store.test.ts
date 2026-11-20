@@ -2,6 +2,7 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { currentTenant } from "../src/tenants/context.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import {
   exerciseDeliveryExpiry,
   exerciseDeliveryExpiryRevive,
@@ -39,6 +40,47 @@ test("pg delivery store: recovered reply text is safe to persist and retry", { s
   assert.equal(duplicate.id, queued.id);
   assert.equal(duplicate.text, queued.text);
   await store.ack(queued.id, Date.now());
+});
+
+test("pg delivery tenancy upgrade preserves an existing Finny delivery reference", { skip }, async () => {
+  const url = testDatabaseUrl();
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: url });
+  await pool.query(`CREATE TABLE deliveries(
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    destination JSONB NOT NULL,
+    text TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    delivered_at BIGINT
+  )`);
+  await pool.query(`CREATE TABLE finny_results(
+    id TEXT PRIMARY KEY,
+    delivery_id TEXT UNIQUE,
+    CONSTRAINT finny_results_delivery_fk FOREIGN KEY(delivery_id) REFERENCES deliveries(id)
+  )`);
+  await pool.query(
+    `INSERT INTO deliveries(id,idempotency_key,destination,text,created_at)
+     VALUES('delivery-1','finny-result:result-1','{"type":"slack","target":"C1"}','result',1)`,
+  );
+  await pool.query("INSERT INTO finny_results(id,delivery_id) VALUES('result-1','delivery-1')");
+  await pool.end();
+
+  const store = createPostgresDeliveryStore(url);
+  assert.equal((await store.get("delivery-1"))?.text, "result");
+  const inspect = new pg.Pool({ connectionString: url });
+  const keys = await inspect.query<{ columns: string }>(
+    `SELECT string_agg(att.attname, ',' ORDER BY key.ordinality) AS columns
+       FROM pg_constraint con
+       CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS key(attnum, ordinality)
+       JOIN pg_attribute att ON att.attrelid=con.conrelid AND att.attnum=key.attnum
+      WHERE con.conrelid='deliveries'::regclass AND con.contype='p'
+      GROUP BY con.oid`,
+  );
+  assert.deepEqual(keys.rows, [{ columns: "tenant_id,id" }]);
+  const finnyFk = await inspect.query("SELECT 1 FROM pg_constraint WHERE conname='finny_results_delivery_fk'");
+  assert.equal(finnyFk.rowCount, 0);
+  await inspect.end();
 });
 
 test("pg delivery store: the queue survives across store instances (deploy/multi-instance)", { skip }, async () => {

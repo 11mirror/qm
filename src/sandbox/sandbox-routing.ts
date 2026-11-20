@@ -73,7 +73,7 @@ export function sandboxBackendAvailableToTenant(name: SandboxBackendName): boole
   return boot !== undefined && (tenant === undefined || tenant === boot);
 }
 
-function requireTenantSeparation(name: SandboxBackendName): void {
+export function assertSandboxBackendAvailableToTenant(name: SandboxBackendName): void {
   if (sandboxBackendAvailableToTenant(name)) return;
   throw new Error(`sandbox backend ${name} does not keep tenants apart; only a single-tenant deployment can use it`);
 }
@@ -87,14 +87,14 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   })();
 
   const backendFor = (name: SandboxBackendName): Sandbox => {
-    requireTenantSeparation(name);
+    assertSandboxBackendAvailableToTenant(name);
     const sandbox = backends[name];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${name}; refusing to use a substitute computer`);
     return sandbox;
   };
 
   const forHandle = (handle: SandboxHandle): Sandbox => {
-    requireTenantSeparation((handle.backend ?? defaultBackend) as SandboxBackendName);
+    assertSandboxBackendAvailableToTenant((handle.backend ?? defaultBackend) as SandboxBackendName);
     if (!handle.backend) return fallback;
     const sandbox = backends[handle.backend as SandboxBackendName];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${handle.backend}`);

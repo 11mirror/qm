@@ -69,8 +69,9 @@ test("on a deployment shared by tenants, backends that cannot keep tenants apart
 
 test("shared tenants can only discover, create, and run isolated providers", async () => {
   const backends = { e2b: backend("e2b"), sprites: backend("sprites"), local: backend("local") };
+  const records = memoryMap<SandboxResource>();
   const resources = createSandboxResources({
-    records: memoryMap<SandboxResource>(),
+    records,
     loads: memoryMap<LoadSample>(),
     defaults: memoryMap<SandboxDefault>(),
     backends,
@@ -80,10 +81,25 @@ test("shared tenants can only discover, create, and run isolated providers", asy
   });
   const tenantRouter = createSandboxRouter({ backends, defaultBackend: "sprites", resources });
   await withTenant(randomUUID(), async () => {
+    await records.put("legacy-local", {
+      id: "legacy-local",
+      backend: "local",
+      ownerScopeId: "personal:pat",
+      backingScopeId: "sandbox-legacy-local",
+      name: "Legacy local",
+      createdBy: "pat",
+      createdAt: new Date(0).toISOString(),
+      legacy: true,
+      state: "ready",
+    });
     assert.deepEqual(
       (await resources.list("pat", "personal:pat")).providers.map(({ name }) => name),
       ["sprites"],
     );
+    assert.deepEqual((await resources.list("pat", "personal:pat")).sandboxes[0]?.availableActions, []);
+    await assert.rejects(resources.status("pat", "legacy-local"), /does not keep tenants apart/);
+    await assert.rejects(resources.restart("pat", "legacy-local"), /does not keep tenants apart/);
+    await assert.rejects(resources.retire("pat", "legacy-local"), /does not keep tenants apart/);
     await assert.rejects(resources.create("pat", "personal:pat", "local"), /does not keep tenants apart/);
     const record = await resources.create("pat", "personal:pat", "sprites");
     const handle = await tenantRouter.provision("personal:pat", { sandboxId: record.id });

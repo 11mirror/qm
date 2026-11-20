@@ -119,13 +119,27 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS failed_reason TEXT`,
       ],
     },
-    ...tenantTables("delivery/store/0008-tenants", [
+    ...tenantTables(
+      "delivery/store/0008-tenants",
+      [
+        {
+          table: "deliveries",
+          primaryKey: "id",
+          unique: [{ name: "deliveries_idempotency_key_key", columns: "idempotency_key", constraint: true }],
+        },
+      ],
       {
-        table: "deliveries",
-        primaryKey: "id",
-        unique: [{ name: "deliveries_idempotency_key_key", columns: "idempotency_key", constraint: true }],
+        before: [
+          `DO $qm$
+           BEGIN
+             IF to_regclass('finny_results') IS NOT NULL THEN
+               EXECUTE 'ALTER TABLE finny_results DROP CONSTRAINT IF EXISTS finny_results_delivery_fk';
+             END IF;
+           END
+           $qm$`,
+        ],
       },
-    ]),
+    ),
     {
       id: "delivery/store/0009-claims",
       statements: [

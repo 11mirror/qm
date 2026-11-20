@@ -19,7 +19,12 @@ import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { IsCurrentSharedScopeMember } from "../resolution/scope-membership.ts";
 import { intersectEgressPolicies } from "../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
-import { NoDefaultSandboxError, sandboxBackendAvailableToTenant, type SandboxBackendName } from "./sandbox-routing.ts";
+import {
+  NoDefaultSandboxError,
+  assertSandboxBackendAvailableToTenant,
+  sandboxBackendAvailableToTenant,
+  type SandboxBackendName,
+} from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
@@ -293,6 +298,7 @@ export function createSandboxResources(opts: {
     return record;
   };
   const destroy = async (current: SandboxResource): Promise<void> => {
+    assertSandboxBackendAvailableToTenant(current.backend);
     const backend = opts.backends[current.backend];
     if (!backend?.destroyScope) throw new Error(`sandbox retirement unavailable: ${current.backend}`);
     const retiring = { ...current, state: "retired" as const, cleanupPending: true };
@@ -339,6 +345,7 @@ export function createSandboxResources(opts: {
       const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });
       if (!opts.backends[backend])
         throw new Error(`sandbox backend unavailable: ${backend}; this deployment does not run it`);
+      assertSandboxBackendAvailableToTenant(backend);
       return backend;
     },
     initialize,
@@ -409,6 +416,7 @@ export function createSandboxResources(opts: {
     access: agentRecord,
     async status(actorId, id) {
       const record = await agentRecord(actorId, id);
+      assertSandboxBackendAvailableToTenant(record.backend);
       const backend = opts.backends[record.backend];
       if (!backend?.computerStatus) throw new Error(`sandbox status unavailable: ${record.backend}`);
       return use(id, () => backend.computerStatus!(record.backingScopeId));
@@ -417,6 +425,7 @@ export function createSandboxResources(opts: {
       await initialize();
       const record = await agentRecord(actorId, id);
       if (record.state === "retired") throw new Error("sandbox has been retired");
+      assertSandboxBackendAvailableToTenant(record.backend);
       const backend = opts.backends[record.backend];
       if (!backend?.restartComputer) throw new Error(`sandbox restart unavailable: ${record.backend}`);
       checkMemory(backend, memoryGb);
@@ -442,7 +451,9 @@ export function createSandboxResources(opts: {
       for (const record of await opts.records.all()) {
         if (record.jobOnly || !(await opts.canUseScope(actorId, record.ownerScopeId))) continue;
         const backend = opts.backends[record.backend];
-        let availableActions = actionsFor(backend).filter((action) => action !== "create");
+        let availableActions = sandboxBackendAvailableToTenant(record.backend)
+          ? actionsFor(backend).filter((action) => action !== "create")
+          : [];
         if (record.state === "retired")
           availableActions = (record.cleanupPending || record.error) && backend?.destroyScope ? ["retire"] : [];
         sandboxes.push({ ...record, holders: undefined, availableActions });
@@ -459,10 +470,7 @@ export function createSandboxResources(opts: {
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
         throw new Error(`sandbox backend unavailable: ${backend}`);
-      if (!sandboxBackendAvailableToTenant(backend as SandboxBackendName))
-        throw new Error(
-          `sandbox backend ${backend} does not keep tenants apart; only a single-tenant deployment can use it`,
-        );
+      assertSandboxBackendAvailableToTenant(backend as SandboxBackendName);
       checkMemory(opts.backends[backend as SandboxBackendName]!, memoryGb);
       if (jobOnly && !opts.backends[backend as SandboxBackendName]?.destroyScope)
         throw new Error(
@@ -529,6 +537,7 @@ export function createSandboxResources(opts: {
         if (id !== null) {
           const record = await agentRecord(actorId, id);
           if (record.state === "retired") throw new Error("sandbox has been retired");
+          assertSandboxBackendAvailableToTenant(record.backend);
           if (record.ownerScopeId !== scopeId)
             throw new Error(
               "the default sandbox must belong to this scope; use sandbox_id for another authorized scope",
