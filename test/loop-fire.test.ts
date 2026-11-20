@@ -1510,8 +1510,7 @@ test("a long partial Gmail follow-up preserves its retrievable source reference"
       dedupeKey: "long-gmail",
       source: "gmail",
       sourcePayload: {
-        snippet: "opening ".repeat(2_000),
-        sourceContextPartial: true,
+        snippet: "opening ".repeat(1_500),
         gmail: { threadId: "gmail-thread-complete", accountType: "company" },
       },
     },

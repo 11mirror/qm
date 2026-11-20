@@ -23,7 +23,12 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
   init(baseURL: URL, configuration: URLSessionConfiguration = .ephemeral) {
     self.baseURL = baseURL
     vault = SessionVault(account: baseURL.absoluteString)
-    token = vault.read()
+    token = nil
+    do {
+      token = try vault.read()
+    } catch {
+      Log.background.failure("Reading saved session", error)
+    }
     let config = configuration
     config.httpShouldSetCookies = false
     config.httpCookieStorage = nil
@@ -39,10 +44,16 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     token = value
   }
 
-  func signOut() {
-    generation = UUID()
-    token = nil
-    vault.delete()
+  @discardableResult func signOut() -> Error? {
+    do {
+      try vault.delete()
+      generation = UUID()
+      token = nil
+      return nil
+    } catch {
+      Log.background.failure("Deleting saved session", error)
+      return error
+    }
   }
 
   func url(_ path: String, query: [URLQueryItem] = []) -> URL {
@@ -144,7 +155,8 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     try check(response, generation: current, data: responseData)
     let blob = try JSONDecoder().decode(UploadedBlob.self, from: responseData)
     guard !blob.blobId.isEmpty, blob.sizeBytes == attachment.size else {
-      throw QMError.message("The server could not confirm this upload. Try attaching the file again.")
+      throw QMError.message(
+        "The server could not confirm this upload. Try attaching the file again.")
     }
     return blob
   }

@@ -404,10 +404,13 @@ final class AppModel {
 
   func signOut() {
     signIn.cancel()
+    if let failure = client?.signOut() {
+      error = failure.localizedDescription
+      return
+    }
     if let client, let identity {
       DraftStore.removeAccount(client.baseURL.absoluteString + identity.user)
     }
-    client?.signOut()
     resetAfterSessionLoss()
     error = nil
   }

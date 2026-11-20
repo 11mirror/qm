@@ -72,15 +72,11 @@ export interface UserStore extends UserLinkStore {
   setDisplayName(alias: string, name: string): Promise<boolean>;
 }
 
-const DISPLAY_NAME_MAX = 200;
-
 export function cleanDisplayName(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const name = raw
     .replace(/[\p{Cc}\p{Cf}]+/gu, " ")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, DISPLAY_NAME_MAX)
     .trim();
   return name || undefined;
 }
@@ -256,7 +252,14 @@ export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
     id: "users/v2/0006-display-name",
     statements: [
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT
-         CHECK (display_name IS NULL OR (display_name <> '' AND char_length(display_name) <= ${DISPLAY_NAME_MAX}))`,
+         CHECK (display_name IS NULL OR (display_name <> '' AND char_length(display_name) <= 200))`,
+    ],
+  },
+  {
+    id: "users/v2/0007-complete-display-name",
+    statements: [
+      `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_display_name_check`,
+      `ALTER TABLE users ADD CONSTRAINT users_display_name_check CHECK (display_name IS NULL OR display_name <> '')`,
     ],
   },
 ].sort((a, b) => Number(a.id > b.id) - Number(a.id < b.id));

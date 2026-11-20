@@ -12,15 +12,20 @@ struct SessionVault {
     ]
   }
 
-  func read() -> String? {
+  func read() throws -> String? {
     var request = query
     request[kSecReturnData as String] = true
     request[kSecMatchLimit as String] = kSecMatchLimitOne
     var result: CFTypeRef?
-    guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess,
-      let data = result as? Data
-    else { return nil }
-    return String(data: data, encoding: .utf8)
+    let status = SecItemCopyMatching(request as CFDictionary, &result)
+    if status == errSecItemNotFound { return nil }
+    guard status == errSecSuccess, let data = result as? Data else {
+      throw QMError.message("Could not securely read your session (Keychain status \(status)).")
+    }
+    guard let token = String(data: data, encoding: .utf8) else {
+      throw QMError.message("The securely saved session is not valid UTF-8.")
+    }
+    return token
   }
 
   func write(_ token: String) throws {
@@ -31,13 +36,20 @@ struct SessionVault {
       var request = query
       request[kSecValueData as String] = data
       request[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-      guard SecItemAdd(request as CFDictionary, nil) == errSecSuccess else {
-        throw QMError.message("Could not securely save your session.")
+      let addStatus = SecItemAdd(request as CFDictionary, nil)
+      guard addStatus == errSecSuccess else {
+        throw QMError.message(
+          "Could not securely save your session (Keychain status \(addStatus)).")
       }
     } else if status != errSecSuccess {
-      throw QMError.message("Could not securely update your session.")
+      throw QMError.message("Could not securely update your session (Keychain status \(status)).")
     }
   }
 
-  func delete() { SecItemDelete(query as CFDictionary) }
+  func delete() throws {
+    let status = SecItemDelete(query as CFDictionary)
+    guard status == errSecSuccess || status == errSecItemNotFound else {
+      throw QMError.message("Could not securely delete your session (Keychain status \(status)).")
+    }
+  }
 }

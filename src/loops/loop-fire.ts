@@ -125,14 +125,28 @@ const ITEM_THREAD_CONTEXT = 12;
 
 type StageInput = string | { input: string; securityScreenData: string };
 
+const ITEM_SOURCE_SCREEN_CHARS = MAX_SCREEN_CHARS / 2 - 100;
+
 function screened(data: string): string {
-  const max = MAX_SCREEN_CHARS / 2 - 100;
-  return data.length <= max ? data : `${data.slice(0, max).toWellFormed()}\n…[truncated]`;
+  return data.length <= ITEM_SOURCE_SCREEN_CHARS
+    ? data
+    : `${data.slice(0, ITEM_SOURCE_SCREEN_CHARS).toWellFormed()}\n…[truncated]`;
 }
 
-function itemSourceReference(item: LoopItem): Record<string, unknown> | undefined {
+function itemSourceRecord(item: LoopItem): Record<string, unknown> {
+  return {
+    dedupeKey: item.sourceKey,
+    state: ledgerState(item),
+    ...(item.source ? { source: item.source } : {}),
+    sourcePayload: agentSourcePayload(item.sourcePayload ?? {}, item.source),
+  };
+}
+
+function itemSourceReference(item: LoopItem, record = itemSourceRecord(item)): Record<string, unknown> | undefined {
   const payload = item.sourcePayload ?? {};
-  if (payload.sourceContextPartial !== true || !payload.gmail || typeof payload.gmail !== "object") return undefined;
+  const partial =
+    payload.sourceContextPartial === true || promptText(JSON.stringify(record)).length > ITEM_SOURCE_SCREEN_CHARS;
+  if (!partial || !payload.gmail || typeof payload.gmail !== "object") return undefined;
   const gmail = payload.gmail as Record<string, unknown>;
   return {
     sourceContextPartial: true,
@@ -145,13 +159,10 @@ function itemSourceReference(item: LoopItem): Record<string, unknown> | undefine
 }
 
 function itemSource(item: LoopItem): string {
-  const source = JSON.stringify({
-    dedupeKey: item.sourceKey,
-    state: ledgerState(item),
-    ...(item.source ? { source: item.source } : {}),
-    ...(itemSourceReference(item) ? { sourceReference: itemSourceReference(item) } : {}),
-    sourcePayload: agentSourcePayload(item.sourcePayload ?? {}, item.source),
-  });
+  const record = itemSourceRecord(item);
+  const reference = itemSourceReference(item, record);
+  const { sourcePayload, ...identity } = record;
+  const source = JSON.stringify({ ...identity, ...(reference ? { sourceReference: reference } : {}), sourcePayload });
   return screened(promptText(source));
 }
 

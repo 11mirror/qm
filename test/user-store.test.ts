@@ -283,7 +283,7 @@ test("a person's display name is stored once per user, refreshed when it changes
   assert.equal(await roster.setDisplayName(oidc, "Ada King"), true);
   assert.equal((await roster.resolve([oidc])).get(oidc)?.displayName, "Ada King");
   await roster.setDisplayName(oidc, "x".repeat(500));
-  assert.equal((await roster.get(oidc))?.displayName?.length, 200);
+  assert.equal((await roster.get(oidc))?.displayName, "x".repeat(500));
 });
 
 test("linking keeps the name a sign-in already had, and labels fall back to an email, never to a raw sign-in", async () => {
