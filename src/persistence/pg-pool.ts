@@ -345,8 +345,34 @@ function unmigrated(migration: PgMigration): Error {
   return new Error(message);
 }
 
-export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
+function migrationsInDependencyOrder(
+  migrations: readonly PgMigration[],
+  available: ReadonlyMap<string, PgMigration> = new Map(migrations.map((migration) => [migration.id, migration])),
+): PgMigration[] {
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const ordered: PgMigration[] = [];
+  const visit = (migration: PgMigration): void => {
+    if (visited.has(migration.id)) return;
+    if (visiting.has(migration.id)) throw new Error(`pg-pool: migration dependency cycle at ${migration.id}`);
+    visiting.add(migration.id);
+    const predecessor = migration.upgradeFrom ? available.get(migration.upgradeFrom) : undefined;
+    if (predecessor) visit(predecessor);
+    visiting.delete(migration.id);
+    visited.add(migration.id);
+    ordered.push(migration);
+  };
+  for (const migration of migrations) visit(migration);
+  return ordered;
+}
+
+export async function applyPgMigrations(
+  pool: Pool,
+  migrations: readonly PgMigration[],
+  available?: ReadonlyMap<string, PgMigration>,
+): Promise<void> {
   if (!migrations.length) return;
+  const ordered = migrationsInDependencyOrder(migrations, available);
   const client = await pool.connect();
   let discard: Error | undefined;
   try {
@@ -373,7 +399,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       PG_MIGRATIONS_TABLE,
     ]);
     if (!ledger.rows[0]?.present) {
-      await mayMigrate(migrations[0]!);
+      await mayMigrate(ordered[0]!);
       await client.query(
         `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
         id TEXT PRIMARY KEY,
@@ -397,7 +423,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       }
       return known.get(id);
     };
-    for (const migration of migrations) {
+    for (const migration of ordered) {
       if (migration.upgradeFrom && (await recorded(migration.upgradeFrom)) === undefined) continue;
       const applied = await recorded(migration.id);
       if (applied !== undefined) {
@@ -587,7 +613,7 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
   async function ready(): Promise<void> {
     if (closed) throw new Error("Postgres store is closed");
     await (readyP ??= withMigrationPool(async (instance) => {
-      await applyPgMigrations(instance, migrations);
+      await applyPgMigrations(instance, migrations, registeredMigrations.get(connectionString));
     }).catch((error) => {
       readyP = null;
       throw error;
@@ -676,7 +702,9 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
     for (const migration of batch) registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
     await ready();
-    await withMigrationPool((instance) => applyPgMigrations(instance, batch));
+    await withMigrationPool((instance) =>
+      applyPgMigrations(instance, batch, registeredMigrations.get(connectionString)),
+    );
   }
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(connectionString, definePgMigration(definition));

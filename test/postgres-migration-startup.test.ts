@@ -47,6 +47,92 @@ test("slow lazy migrations queue with dynamic and bulk migrations before pool ac
   });
 });
 
+test("bulk startup migrations revisit a dependency registered before its predecessor", { skip }, async () => {
+  await withDatabase(async (url, admin) => {
+    const table = `startup_dependency_${Date.now()}`;
+    const dependent = createPgPool(url, [
+      {
+        id: `${table}/a-dependent`,
+        upgradeFrom: `${table}/z-predecessor`,
+        statements: [`INSERT INTO ${table}(value) VALUES (1)`],
+      },
+    ]);
+    const predecessor = createPgPool(url, [
+      { id: `${table}/z-predecessor`, statements: [`CREATE TABLE ${table}(value INT)`] },
+    ]);
+    try {
+      await migrateRegisteredPgSchemas(url);
+      assert.deepEqual((await admin.query(`SELECT value FROM ${table}`)).rows, [{ value: 1 }]);
+    } finally {
+      await Promise.all([dependent.close(), predecessor.close()]);
+    }
+  });
+});
+
+test("lazy migrations preserve declared order when no dependency changes it", { skip }, async () => {
+  await withDatabase(async (url, admin) => {
+    const table = `lazy_order_${Date.now()}`;
+    const store = createPgPool(url, [
+      { id: `${table}/z-create`, statements: [`CREATE TABLE ${table}(value INT)`] },
+      { id: `${table}/a-insert`, statements: [`INSERT INTO ${table}(value) VALUES (1)`] },
+    ]);
+    try {
+      await store.q("SELECT 1");
+      assert.deepEqual((await admin.query(`SELECT value FROM ${table}`)).rows, [{ value: 1 }]);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+test("a lazy store applies its predecessor registered by another store", { skip }, async () => {
+  await withDatabase(async (url, admin) => {
+    const table = `lazy_dependency_${Date.now()}`;
+    const dependent = createPgPool(url, [
+      {
+        id: `${table}/a-dependent`,
+        upgradeFrom: `${table}/z-predecessor`,
+        statements: [`CREATE TABLE ${table}_dependent(value INT)`],
+      },
+    ]);
+    const predecessor = createPgPool(url, [
+      { id: `${table}/z-predecessor`, statements: [`CREATE TABLE ${table}(value INT)`] },
+    ]);
+    try {
+      await dependent.q("SELECT 1");
+      assert.equal(
+        (await admin.query("SELECT to_regclass($1) AS table", [`${table}_dependent`])).rows[0].table,
+        `${table}_dependent`,
+      );
+    } finally {
+      await Promise.all([dependent.close(), predecessor.close()]);
+    }
+  });
+});
+
+test("a dynamic migration applies its predecessor registered by another store", { skip }, async () => {
+  await withDatabase(async (url, admin) => {
+    const table = `dynamic_dependency_${Date.now()}`;
+    const predecessor = createPgPool(url, [
+      { id: `${table}/z-predecessor`, statements: [`CREATE TABLE ${table}(value INT)`] },
+    ]);
+    const dynamic = createPgPool(url);
+    try {
+      await dynamic.migrate({
+        id: `${table}/a-dependent`,
+        upgradeFrom: `${table}/z-predecessor`,
+        statements: [`CREATE TABLE ${table}_dependent(value INT)`],
+      });
+      assert.equal(
+        (await admin.query("SELECT to_regclass($1) AS table", [`${table}_dependent`])).rows[0].table,
+        `${table}_dependent`,
+      );
+    } finally {
+      await Promise.all([predecessor.close(), dynamic.close()]);
+    }
+  });
+});
+
 test("concurrent cold and repeat migration entrypoints exit and reject checksum drift", { skip }, async () => {
   await withDatabase(async (url, admin) => {
     const run = () =>
