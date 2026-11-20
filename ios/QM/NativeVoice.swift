@@ -245,7 +245,10 @@ final class NativeVoiceModel: NSObject {
       send(bridge.event(muted ? "session.input_audio.mute" : "session.input_audio.unmute"))
       status = muted ? "Microphone muted" : "Listening · You can interrupt naturally"
       flushEvents()
-    } catch { fail("Could not resume audio. QM tasks continue in your history.") }
+    } catch {
+      Log.background.failure("Resuming voice audio after unmute", error)
+      fail("Could not resume audio. QM tasks continue in your history.")
+    }
   }
   func interruptAudio(_ type: UInt, options: UInt = 0) {
     guard connected, !stopping else { return }
@@ -269,7 +272,10 @@ final class NativeVoiceModel: NSObject {
         microphone?.isEnabled = !muted
         status = muted ? "Microphone muted" : "Listening · You can interrupt naturally"
         flushEvents()
-      } catch { fail("Could not resume audio. QM tasks continue in your history.") }
+      } catch {
+        Log.background.failure("Resuming voice audio after interruption", error)
+        fail("Could not resume audio. QM tasks continue in your history.")
+      }
     }
   }
   func headphonesDisconnected() {

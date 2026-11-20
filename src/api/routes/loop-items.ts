@@ -528,6 +528,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
       rfcMessageId: text("rfcMessageId", 400),
     },
     sentChat: true,
+    ...(body.sourceContextPartial === true ? { sourceContextPartial: true } : {}),
   } as LoopSourcePayload;
   const defaults = await ensureDefaultInboxLoops(deps.store, owner);
   const loop = defaults.find((entry) => entry.sources?.includes("gmail"))!;

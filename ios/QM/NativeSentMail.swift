@@ -261,7 +261,6 @@ struct NativeSentMailDetail: View {
   let original: NativeSentEmail
   @State private var detail: NativeSentEmail?
   @State private var plainBody = ""
-  @State private var chatTrimmed = false
   @State private var item: NativeInboxItem?
   @State private var error: String?
   @State private var busy = false
@@ -311,11 +310,6 @@ struct NativeSentMailDetail: View {
               title: "Ask QM about this email", busyTitle: "Opening chat…", busy: busy && !loading)
           }
         }.disabled(busy)
-        if chatTrimmed {
-          Text(
-            "This email is longer than \(NativeSentEmail.chatLimit.formatted()) characters. QM will only see the first \(NativeSentEmail.chatLimit.formatted())."
-          ).font(.caption).foregroundStyle(.secondary)
-        }
       }
       if let error {
         Text(error).foregroundStyle(.red)
@@ -347,7 +341,6 @@ struct NativeSentMailDetail: View {
         "api/inbox/sent/\(original.id.apiComponent)",
         query: [.init(name: "accountType", value: original.accountType ?? "default")])
       plainBody = fetched.plainBody
-      chatTrimmed = fetched.chatTrimmed
       detail = fetched
       error = nil
     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
@@ -361,7 +354,7 @@ struct NativeSentMailDetail: View {
         "accountType": detail.accountType ?? original.accountType ?? "default",
         "messageId": detail.id, "threadId": detail.threadId, "subject": detail.subject,
         "from": detail.from ?? "", "to": detail.to, "cc": detail.cc ?? "",
-        "text": detail.chatText,
+        "text": detail.chatText, "sourceContextPartial": detail.chatTrimmed,
       ]
       if let id = detail.rfcMessageId { body["rfcMessageId"] = id }
       let result: NativeInboxDetail = try await client.fetch("api/inbox/sent-chat", body: body)

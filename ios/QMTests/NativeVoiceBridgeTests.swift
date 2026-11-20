@@ -53,6 +53,35 @@ final class NativeVoiceBridgeTests: XCTestCase {
       bridge.tick(now: 1.4), [.submit(text: request("Summarize today"), delegation: "d1")])
   }
 
+  func testHandoffRetainsEveryUnconsumedInputDelta() throws {
+    var bridge = NativeVoiceBridge()
+    for index in 0..<401 {
+      _ = bridge.receive(heard("word\(index) ", Double(index), Double(index + 1)), now: 0)
+    }
+    let actions = bridge.receive(delegated("d1", 401), now: 1)
+    guard case .submit(let text, _) = try XCTUnwrap(actions.first) else {
+      return XCTFail("Expected a submitted handoff")
+    }
+    XCTAssertTrue(text.contains("word0"))
+    XCTAssertTrue(text.contains("word400"))
+  }
+
+  func testHandoffRetainsTheCompleteSpokenExchange() throws {
+    var bridge = NativeVoiceBridge()
+    _ = bridge.receive(heard("Start", 0, 100), now: 0)
+    _ = bridge.receive(delegated("d1", 100), now: 1)
+    _ = bridge.receive(heard("Earlier context", 200, 300), now: 2)
+    let response = String(repeating: "voice detail ", count: 250) + "approval needed"
+    _ = bridge.receive(said(response, 400), now: 3)
+    _ = bridge.receive(heard("Continue", 500, 600), now: 4)
+    let actions = bridge.receive(delegated("d2", 600), now: 5)
+    guard case .submit(let text, _) = try XCTUnwrap(actions.first) else {
+      return XCTFail("Expected a submitted handoff")
+    }
+    XCTAssertTrue(text.contains("Earlier context"))
+    XCTAssertTrue(text.contains(response))
+  }
+
   func testWireNumbersParsedFromJSONAreAccepted() throws {
     var bridge = NativeVoiceBridge()
     _ = bridge.receive(

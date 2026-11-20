@@ -76,13 +76,11 @@ struct NativeVoiceBridge {
       let start = Self.number(event["start_ms"]) ?? heard.last?.end ?? 0
       let end = max(Self.number(event["end_ms"]) ?? start + 1, start)
       heard.append(.init(text: text, start: start, end: end, at: now, busy: busy))
-      if heard.count > 400 { heard.removeFirst(heard.count - 400) }
       if let waiting, end >= waiting.offset { return release() }
       return []
     case "session.output_transcript.delta":
       guard let text = event["delta"] as? String else { return [] }
       said.append(.init(text: text, start: Self.number(event["start_ms"]) ?? heard.last?.end ?? 0))
-      if said.count > 200 { said.removeFirst(said.count - 200) }
       return []
     case "session.delegation.created":
       guard let delegation = event["delegation"] as? [String: Any],
@@ -109,6 +107,7 @@ struct NativeVoiceBridge {
     for index in pending { heard[index].handled = true }
     for index in pending { heard[index].sent = true }
     consumed = max(consumed, pending.map { heard[$0].end }.max() ?? consumed)
+    discardConsumed()
     remarked = true
     append(
       "session.thinking.append", id,
@@ -199,6 +198,7 @@ struct NativeVoiceBridge {
     }
     for index in fresh { heard[index].sent = true }
     consumed = max(consumed, fresh.map { heard[$0].end }.max() ?? consumed)
+    discardConsumed()
     delegation = id
     if words.isEmpty {
       append(
@@ -299,17 +299,15 @@ struct NativeVoiceBridge {
         merged.append((user, text))
       }
     }
-    var kept: [String] = []
-    var count = 0
-    for (user, text) in merged.reversed() {
+    return merged.compactMap { user, text in
       let words = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-      guard !words.isEmpty else { continue }
-      let line = "- \(user ? "User" : "You (voice)"): \(words)"
-      guard count + line.count <= 2000 else { break }
-      kept.insert(line, at: 0)
-      count += line.count
-    }
-    return kept.joined(separator: "\n")
+      return words.isEmpty ? nil : "- \(user ? "User" : "You (voice)"): \(words)"
+    }.joined(separator: "\n")
+  }
+
+  private mutating func discardConsumed() {
+    heard.removeAll { $0.sent }
+    said.removeAll { $0.start <= consumed }
   }
 
   private static func number(_ value: Any?) -> Double? {

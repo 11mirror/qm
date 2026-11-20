@@ -17,7 +17,13 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
   const ctx = {
     actor: { p: "alice" },
     url: new URL("http://localhost/?principalId=bob"),
-    body: { threadId: "sent-only-thread", subject: "No inbox match", from: "Alice", text: "The sent email body" },
+    body: {
+      threadId: "sent-only-thread",
+      subject: "No inbox match",
+      from: "Alice",
+      text: "The sent email body",
+      sourceContextPartial: true,
+    },
     deps: { loops: { store, items }, featureFlags: { enabled: async () => previewEnabled } },
     res: {
       setHeader() {},
@@ -41,6 +47,7 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
   assert.equal(original.state, "held");
   assert.equal((await store.get(original.loopId))!.owner, "alice");
   assert.equal((await items.get(original.id))!.sourcePayload!.snippet, "The sent email body");
+  assert.equal((await items.get(original.id))!.sourcePayload!.sourceContextPartial, true);
   await items.appendThread(original.id, [{ role: "human", text: "Summarize this" }]);
   await sentChat(ctx);
   assert.equal(response!.item.id, original.id);
