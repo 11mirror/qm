@@ -26,6 +26,7 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
     config: built.config,
     deliveries: built.deliveries,
     crons: built.crons,
+    users: built.users,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -36,6 +37,32 @@ const ALICE = { "x-admin-actor": "admin-alice@default-org" };
 const get = (base: string, path: string, headers: Record<string, string> = ALICE) => fetch(base + path, { headers });
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await get(base, path, headers)).json();
+
+test("admin transcript fallback reports user-store failures", async (t) => {
+  const s = start();
+  t.after(s.close);
+  const diagnostics: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => void diagnostics.push(args.map(String).join(" ")));
+  assert.equal(
+    (
+      await s.built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "dm:U1:user-store-fallback" },
+        text: "hello",
+      })
+    ).status,
+    "ok",
+  );
+  const listed = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");
+  t.mock.method(s.built.users, "get", async () => Promise.reject(new Error("user lookup unavailable")));
+  const response = await get(
+    s.base,
+    `/v1/admin/sessions/${encodeURIComponent(listed.sessions[0].id)}?scope=org:default-org`,
+  );
+  assert.equal(response.status, 200);
+  assert.match(diagnostics.join("\n"), /admin sessions: resolve user display name.*user lookup unavailable/);
+});
 
 test("an org admin sees conversations, transcripts, and files top-down", async () => {
   const s = start();

@@ -15,6 +15,7 @@ import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { requireScopedResource } from "./common.ts";
 import { activityCounts, scopeActivity } from "./scope-activity.ts";
+import { reportFailureAs } from "../../../util/errors.ts";
 import {
   cronOrigins,
   deliveryOrigin,
@@ -30,7 +31,9 @@ const TRANSCRIPT_LIMIT_MAX = 50000;
 const TRANSCRIPT_LIMIT_DEFAULT = 500;
 async function displayNameForPrincipal(app: App, deps: ServerDeps, principalId: string): Promise<string> {
   const member = await app.directoryMember(principalId);
-  const user = await deps.users?.get(principalId).catch(() => null);
+  const user = await deps.users
+    ?.get(principalId)
+    .catch(reportFailureAs("admin sessions: resolve user display name", null));
   return personLabel(principalId, { displayName: member?.displayName, user });
 }
 

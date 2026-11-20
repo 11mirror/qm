@@ -395,9 +395,8 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
       const id = expectedId ?? stored?.microvmId;
       if (id) await terminateBody(id);
       if (!expectedId || !stored || stored.microvmId === expectedId) {
-        const { key, legacy } = homeSnapshotKeys(s3Prefix, s3LeafFor(scopeId));
-        for (const Key of legacy === undefined ? [key] : [key, legacy])
-          await s3.send(new DeleteObjectCommand({ Bucket: opts.s3Bucket, Key }));
+        const { key } = homeSnapshotKeys(s3Prefix, s3LeafFor(scopeId));
+        await s3.send(new DeleteObjectCommand({ Bucket: opts.s3Bucket, Key: key }));
         await store.delete(scopeId);
       }
       if (id) {

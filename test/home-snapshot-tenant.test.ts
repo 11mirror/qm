@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
-import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { createS3SnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import type { S3Send } from "../src/persistence/s3.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
@@ -22,6 +22,17 @@ function fakeBucket(): { s3: S3Send; objects: Map<string, Uint8Array> } {
         const body = objects.get(input.Key);
         if (!body) throw Object.assign(new Error("missing"), { name: "NoSuchKey" });
         return { Body: Readable.from([body]), ContentLength: body.length };
+      }
+      if (command instanceof CopyObjectCommand) {
+        const source = (command.input.CopySource ?? "").replace(/^b\//, "");
+        const body = objects.get(source);
+        if (!body) throw Object.assign(new Error("missing"), { name: "NoSuchKey" });
+        objects.set(input.Key, body);
+        return {};
+      }
+      if (command instanceof DeleteObjectCommand) {
+        objects.delete(input.Key);
+        return {};
       }
       throw new Error(`unexpected command ${String(command)}`);
     },
@@ -82,17 +93,18 @@ test("home snapshot reads and writes fail closed when no tenant is bound", () =>
     assert.equal(objects.size, 0);
   }));
 
-test("a pre-tenancy home is read back only by the sole tenant of a single-tenant core", async () => {
+test("a pre-tenancy home moves once to the sole tenant's canonical key", async () => {
   const { s3, objects } = fakeBucket();
   objects.set("modal-home/personal%3AU1.tar", Buffer.from("legacy home"));
   const store = createS3SnapshotStore({ bucket: "b", prefix: "modal-home", s3 });
   try {
     await bindBootTenant(async () => TEST_TENANT);
     assert.equal(await withTenant(TEST_TENANT, () => read(store, SCOPE)), "legacy home");
+    assert.equal(objects.has("modal-home/personal%3AU1.tar"), false);
+    assert.equal(Buffer.from(objects.get(`modal-home/${TEST_TENANT}/personal%3AU1.tar`)!).toString(), "legacy home");
     assert.equal(await withTenant(randomUUID(), () => read(store, SCOPE)), null);
     await withTenant(TEST_TENANT, () => store.put(SCOPE, Buffer.from("new home")));
     assert.equal(await withTenant(TEST_TENANT, () => read(store, SCOPE)), "new home");
-    assert.equal(Buffer.from(objects.get("modal-home/personal%3AU1.tar")!).toString(), "legacy home");
     await bindBootTenant(async () => undefined);
     objects.delete(`modal-home/${TEST_TENANT}/personal%3AU1.tar`);
     assert.equal(await withTenant(TEST_TENANT, () => read(store, SCOPE)), null);

@@ -2,7 +2,9 @@ import { basename } from "node:path/posix";
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
+  CopyObjectCommand,
   CreateMultipartUploadCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   UploadPartCommand,
@@ -132,7 +134,7 @@ export interface S3SnapshotStoreOptions {
 
 interface HomeSnapshotKeys {
   key: string;
-  legacy?: string;
+  migrationSource?: string;
 }
 
 export function homeSnapshotKeys(prefix: string, leaf: string): HomeSnapshotKeys {
@@ -140,7 +142,7 @@ export function homeSnapshotKeys(prefix: string, leaf: string): HomeSnapshotKeys
   if (tenant === undefined) throw new Error("Home snapshots need a bound tenant");
   return {
     key: `${prefix}/${tenant}/${leaf}`,
-    ...(bootTenant() === tenant ? { legacy: `${prefix}/${leaf}` } : {}),
+    ...(bootTenant() === tenant ? { migrationSource: `${prefix}/${leaf}` } : {}),
   };
 }
 
@@ -159,8 +161,17 @@ export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapsho
   }
   return {
     async open(scope): Promise<StoredSnapshot | null> {
-      const { key, legacy } = keysFor(scope);
-      const got = (await get(key)) ?? (legacy === undefined ? null : await get(legacy));
+      const { key, migrationSource } = keysFor(scope);
+      let got = await get(key);
+      if (!got && migrationSource) {
+        try {
+          await s3.send(new CopyObjectCommand({ Bucket, Key: key, CopySource: `${Bucket}/${migrationSource}` }));
+        } catch (e) {
+          if (!isNoSuchKey(e)) throw e;
+        }
+        got = await get(key);
+        if (got) await s3.send(new DeleteObjectCommand({ Bucket, Key: migrationSource }));
+      }
       if (!got?.Body) return null;
       return { size: got.ContentLength ?? -1, parts: bodyToReadable(got.Body) };
     },

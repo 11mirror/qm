@@ -5,6 +5,7 @@ import { personLabel } from "../identity/person-names.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { UserStore } from "../identity/user-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
+import { reportFailureAs } from "../util/errors.ts";
 
 export interface SignInMemberSources {
   identity: Pick<IdentityService, "listExternalMembers" | "classify">;
@@ -18,7 +19,9 @@ export async function signInMembers(src: SignInMemberSources): Promise<Directory
     src.identity.listExternalMembers(),
     src.sessions?.distinctParticipants() ?? [],
   ]);
-  const users = await src.users?.resolve(participants).catch(() => undefined);
+  const users = await src.users
+    ?.resolve(participants)
+    .catch(reportFailureAs("directory: resolve sign-in member users", undefined));
   const candidates: DirectoryMember[] = [
     ...(src.emailAuthMembers ?? []),
     ...externals
